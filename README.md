@@ -41,7 +41,7 @@ If you prefer to run the application from source or customize it, follow these s
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/typetrace/typetrace.git
+   git clone https://github.com/nickguti/typetrace.git
    cd typetrace
    ```
 
