@@ -1,0 +1,11 @@
+# Ignora i dati locali e privati
+*.json
+*.log
+database_corrupted.json
+
+# Ignora i file di cache di Python e ambienti virtuali
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
