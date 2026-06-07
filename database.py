@@ -6,13 +6,34 @@ from datetime import datetime, timedelta
 DEFAULT_DATA = {
     "settings": {
         "startup": False,
-        "last_profile": "Default"
+        "last_profile": "Default",
+        "builtin_profiles": ["Total", "Desktop", "Gaming"],
+        "recent_processes": []
     },
     "profiles": {
         "Default": {
             "hourly": {},
             "combinations": {},
-            "bigrams": {}
+            "bigrams": {},
+            "burst_records": []
+        },
+        "Total": {
+            "hourly": {},
+            "combinations": {},
+            "bigrams": {},
+            "burst_records": []
+        },
+        "Desktop": {
+            "hourly": {},
+            "combinations": {},
+            "bigrams": {},
+            "burst_records": []
+        },
+        "Gaming": {
+            "hourly": {},
+            "combinations": {},
+            "bigrams": {},
+            "burst_records": []
         }
     }
 }
@@ -34,6 +55,8 @@ class Database:
         with self.lock:
             if not os.path.exists(self.filepath):
                 self.data = json.loads(json.dumps(DEFAULT_DATA)) # Deep copy
+                # Ensure built-in and hidden aggregate profiles exist
+                self._ensure_builtin_profiles()
                 self.save_data()
                 return
                 
@@ -65,6 +88,11 @@ class Database:
                     
                 if "Default" not in self.data["profiles"]:
                     self.data["profiles"]["Default"] = {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []}
+                    
+                self._ensure_builtin_profiles()
+                
+                if "recent_processes" not in self.data.get("settings", {}) or not isinstance(self.data["settings"]["recent_processes"], list):
+                    self.data.setdefault("settings", {})["recent_processes"] = []
                     
                 # Deep validate each profile to make sure sub-keys exist and are dictionaries/lists
                 for p_name, p_data in list(self.data["profiles"].items()):
@@ -100,7 +128,26 @@ class Database:
                 
                 # Reset to default structure
                 self.data = json.loads(json.dumps(DEFAULT_DATA))
+                self._ensure_builtin_profiles()
                 self.save_data()
+
+    def _ensure_builtin_profiles(self):
+        """Helper to ensure all built-in profiles exist and are correctly marked."""
+        if "settings" not in self.data:
+            self.data["settings"] = {}
+        if "builtin_profiles" not in self.data["settings"] or not isinstance(self.data["settings"]["builtin_profiles"], list):
+            self.data["settings"]["builtin_profiles"] = ["Total", "Desktop", "Gaming"]
+            
+        for p in ["Total", "Desktop", "Gaming"]:
+            if p not in self.data["profiles"]:
+                self.data["profiles"][p] = {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []}
+            elif not isinstance(self.data["profiles"][p], dict):
+                self.data["profiles"][p] = {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []}
+        
+        if "__all__" not in self.data["profiles"]:
+            self.data["profiles"]["__all__"] = {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []}
+        elif not isinstance(self.data["profiles"]["__all__"], dict):
+            self.data["profiles"]["__all__"] = {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []}
 
     def save_data(self):
         """Saves current memory state to the local JSON database file."""
@@ -113,9 +160,13 @@ class Database:
                 logging.error(f"Error saving database: {e}")
 
     def get_profiles(self):
-        """Returns list of profile names."""
+        """Returns list of profile names, with built-ins first and excluding the hidden internal __all__ profile."""
         with self.lock:
-            return list(self.data.get("profiles", {}).keys())
+            builtins = ["Total", "Desktop", "Gaming"]
+            all_keys = list(self.data.get("profiles", {}).keys())
+            customs = [p for p in all_keys if p not in builtins and p != "__all__"]
+            existing_builtins = [p for p in builtins if p in all_keys]
+            return existing_builtins + customs
 
     def get_last_profile(self):
         """Returns the last active profile name."""
@@ -149,7 +200,9 @@ class Database:
     def delete_profile(self, name):
         """Deletes a profile. Resets to Default if the active one is deleted."""
         with self.lock:
-            if name == "Default" or name not in self.data["profiles"]:
+            if name in ("Total", "Desktop", "Gaming", "Default", "__all__"):
+                return False
+            if name not in self.data["profiles"]:
                 return False
             
             del self.data["profiles"][name]
@@ -162,60 +215,87 @@ class Database:
         """Resets all data to the default empty template."""
         with self.lock:
             self.data = json.loads(json.dumps(DEFAULT_DATA))
+            self._ensure_builtin_profiles()
             self.save_data()
 
     def reset_profile_statistics(self, profile_name):
         """Resets statistics only for the specified profile."""
         with self.lock:
-            if profile_name in self.data["profiles"]:
-                self.data["profiles"][profile_name] = {
+            target = "__all__" if profile_name == "Total" else profile_name
+            if target in self.data["profiles"]:
+                self.data["profiles"][target] = {
                     "hourly": {},
                     "combinations": {},
                     "bigrams": {},
                     "burst_records": []
                 }
+                if profile_name in ("Total", "Desktop", "Gaming"):
+                    self.data["profiles"][target]["is_builtin"] = True
                 self.save_data()
 
-    def log_key(self, profile_name, key_name, combination=None, bigram_next=None, last_key=None):
-        """Logs in memory the key press, combinations, and bigram transitions."""
+    def get_stats_for_profile(self, profile_name):
+        """Returns the stats profile dict."""
         with self.lock:
-            try:
-                if profile_name not in self.data["profiles"]:
-                    self.create_profile(profile_name)
-                    
-                profile = self.data["profiles"][profile_name]
+            return self.data["profiles"].get(profile_name, {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []})
+
+
+    def get_profile_type(self, profile_name):
+        """Returns the profile type: gaming, desktop, or custom."""
+        with self.lock:
+            name_lower = profile_name.lower()
+            if name_lower == "gaming":
+                return "gaming"
+            elif name_lower == "desktop":
+                return "desktop"
+            else:
+                profile = self.data["profiles"].get(profile_name, {})
+                return profile.get("profile_type", "custom")
+
+    def log_key(self, profile_name, key_name, combination=None, bigram_next=None, last_key=None):
+        """Logs in memory the key press, combinations, and bigram transitions to the active profile and __all__."""
+        with self.lock:
+            self._log_key_to_profile(profile_name, key_name, combination, bigram_next, last_key)
+            if profile_name != "__all__":
+                self._log_key_to_profile("__all__", key_name, combination, bigram_next, last_key)
+
+    def _log_key_to_profile(self, profile_name, key_name, combination=None, bigram_next=None, last_key=None):
+        try:
+            if profile_name not in self.data["profiles"]:
+                self.create_profile(profile_name)
                 
-                # Get hourly bucket key: YYYY-MM-DDTHH:00:00
-                now = datetime.now()
-                hour_key = now.strftime("%Y-%m-%dT%H:00:00")
+            profile = self.data["profiles"][profile_name]
+            
+            # Get hourly bucket key: YYYY-MM-DDTHH:00:00
+            now = datetime.now()
+            hour_key = now.strftime("%Y-%m-%dT%H:00:00")
+            
+            # Initialize hourly stats structures
+            hourly = profile.setdefault("hourly", {})
+            hour_data = hourly.setdefault(hour_key, {"keys": {}, "combinations": {}})
+            if "keys" not in hour_data:
+                hour_data["keys"] = {}
+            if "combinations" not in hour_data:
+                hour_data["combinations"] = {}
                 
-                # Initialize hourly stats structures
-                hourly = profile.setdefault("hourly", {})
-                hour_data = hourly.setdefault(hour_key, {"keys": {}, "combinations": {}})
-                if "keys" not in hour_data:
-                    hour_data["keys"] = {}
-                if "combinations" not in hour_data:
-                    hour_data["combinations"] = {}
-                    
-                # 1. Log the key press
-                hour_data["keys"][key_name] = hour_data["keys"].get(key_name, 0) + 1
+            # 1. Log the key press
+            hour_data["keys"][key_name] = hour_data["keys"].get(key_name, 0) + 1
+            
+            # 2. Log combinations if present (e.g. Ctrl+C)
+            if combination:
+                hour_data["combinations"][combination] = hour_data["combinations"].get(combination, 0) + 1
+                # Also log in the aggregated combinations structure for performance
+                profile.setdefault("combinations", {})
+                profile["combinations"][combination] = profile["combinations"].get(combination, 0) + 1
                 
-                # 2. Log combinations if present (e.g. Ctrl+C)
-                if combination:
-                    hour_data["combinations"][combination] = hour_data["combinations"].get(combination, 0) + 1
-                    # Also log in the aggregated combinations structure for performance
-                    profile.setdefault("combinations", {})
-                    profile["combinations"][combination] = profile["combinations"].get(combination, 0) + 1
-                    
-                # 3. Log bigram transitions (Corrected: transitions from last_key to bigram_next)
-                if bigram_next:
-                    first_key = last_key if last_key else key_name
-                    bigrams = profile.setdefault("bigrams", {})
-                    k1_dict = bigrams.setdefault(first_key, {})
-                    k1_dict[bigram_next] = k1_dict.get(bigram_next, 0) + 1
-            except Exception as e:
-                import logging
-                logging.exception(f"Error logging key '{key_name}' to profile '{profile_name}': {e}")
+            # 3. Log bigram transitions
+            if bigram_next:
+                first_key = last_key if last_key else key_name
+                bigrams = profile.setdefault("bigrams", {})
+                k1_dict = bigrams.setdefault(first_key, {})
+                k1_dict[bigram_next] = k1_dict.get(bigram_next, 0) + 1
+        except Exception as e:
+            import logging
+            logging.exception(f"Error logging key '{key_name}' to profile '{profile_name}': {e}")
 
     def get_aggregated_stats(self, profile_name):
         """
@@ -223,10 +303,8 @@ class Database:
         across all hour buckets for the specified profile.
         """
         with self.lock:
-            if profile_name not in self.data["profiles"]:
-                return {"keys": {}, "combinations": {}, "bigrams": {}}
-                
-            profile = self.data["profiles"][profile_name]
+            read_from = "__all__" if profile_name == "Total" else profile_name
+            profile = self.get_stats_for_profile(read_from)
             
             aggregated_keys = {}
             # Aggregate hourly key counts
@@ -256,10 +334,8 @@ class Database:
         - Most common next key (bigram)
         """
         with self.lock:
-            if profile_name not in self.data["profiles"]:
-                return self._empty_stats()
-                
-            profile = self.data["profiles"][profile_name]
+            read_from = "__all__" if profile_name == "Total" else profile_name
+            profile = self.get_stats_for_profile(read_from)
             hourly = profile.get("hourly", {})
             
             # 1. Total count of this key and total keys overall
@@ -372,8 +448,11 @@ class Database:
             self.data.setdefault("settings", {})["profile_mappings"] = mappings
             self.save_data()
 
-    def add_burst_record(self, profile_name, peak_apm, duration):
+    def add_burst_record(self, profile_name, peak_apm, duration, is_internal=False):
         with self.lock:
+            if not is_internal and profile_name != "__all__":
+                self.add_burst_record("__all__", peak_apm, duration, is_internal=True)
+
             if profile_name in self.data["profiles"]:
                 profile = self.data["profiles"][profile_name]
                 bursts = profile.setdefault("burst_records", [])
@@ -388,9 +467,9 @@ class Database:
 
     def get_burst_records(self, profile_name):
         with self.lock:
-            if profile_name in self.data["profiles"]:
-                return self.data["profiles"][profile_name].get("burst_records", [])
-            return []
+            read_from = "__all__" if profile_name == "Total" else profile_name
+            profile = self.get_stats_for_profile(read_from)
+            return profile.get("burst_records", [])
 
     def get_overlay_enabled(self):
         with self.lock:
@@ -400,3 +479,60 @@ class Database:
         with self.lock:
             self.data.setdefault("settings", {})["overlay_enabled"] = enabled
             self.save_data()
+
+    def get_builtin_profiles(self):
+        """Returns the list of built-in profiles."""
+        return ["Total", "Desktop", "Gaming"]
+
+    def get_recent_processes(self, limit=10):
+        """Reads from settings['recent_processes'] list of dicts. Returns sorted by last_seen descending."""
+        with self.lock:
+            recent_list = self.data.get("settings", {}).get("recent_processes", [])
+            if not isinstance(recent_list, list):
+                recent_list = []
+            
+            # Sort by last_seen descending
+            sorted_list = sorted(
+                recent_list,
+                key=lambda x: x.get("last_seen", ""),
+                reverse=True
+            )
+            return sorted_list[:limit]
+
+    def log_process_seen(self, process_name, category):
+        """Upserts process_name into settings['recent_processes']. Keep list max 50 and save."""
+        with self.lock:
+            settings = self.data.setdefault("settings", {})
+            recent_list = settings.setdefault("recent_processes", [])
+            if not isinstance(recent_list, list):
+                recent_list = []
+                settings["recent_processes"] = recent_list
+                
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Look for existing entry
+            found = False
+            for entry in recent_list:
+                if isinstance(entry, dict) and entry.get("process_name", "").lower() == process_name.lower():
+                    entry["last_seen"] = now_str
+                    entry["category"] = category
+                    found = True
+                    break
+                    
+            if not found:
+                recent_list.append({
+                    "process_name": process_name,
+                    "category": category,
+                    "last_seen": now_str
+                })
+                
+            # Sort by last_seen descending
+            recent_list.sort(key=lambda x: x.get("last_seen", ""), reverse=True)
+            
+            # Trim to max 50
+            if len(recent_list) > 50:
+                recent_list = recent_list[:50]
+                settings["recent_processes"] = recent_list
+                
+            self.save_data()
+

@@ -27,18 +27,47 @@ class TestTypeTraceDatabase(unittest.TestCase):
     def test_create_and_delete_profile(self):
         """Verify profile creation and deletion logic."""
         # Create
-        self.assertTrue(self.db.create_profile("Gaming"))
-        self.assertIn("Gaming", self.db.get_profiles())
+        self.assertTrue(self.db.create_profile("CustomProfile"))
+        self.assertIn("CustomProfile", self.db.get_profiles())
         
         # Prevent duplicates
-        self.assertFalse(self.db.create_profile("Gaming"))
+        self.assertFalse(self.db.create_profile("CustomProfile"))
         
         # Delete
-        self.assertTrue(self.db.delete_profile("Gaming"))
-        self.assertNotIn("Gaming", self.db.get_profiles())
+        self.assertTrue(self.db.delete_profile("CustomProfile"))
+        self.assertNotIn("CustomProfile", self.db.get_profiles())
         
-        # Prevent deleting "Default"
+        # Prevent deleting "Default" or built-in profiles
         self.assertFalse(self.db.delete_profile("Default"))
+        self.assertFalse(self.db.delete_profile("Total"))
+        self.assertFalse(self.db.delete_profile("Desktop"))
+        self.assertFalse(self.db.delete_profile("Gaming"))
+
+    def test_builtin_profiles_initialization(self):
+        """Verify that Total, Desktop, and Gaming are initialized and marked as built-in."""
+        profiles = self.db.get_profiles()
+        self.assertIn("Total", profiles)
+        self.assertIn("Desktop", profiles)
+        self.assertIn("Gaming", profiles)
+        self.assertNotIn("__all__", profiles) # Hidden internal profile
+        # Check that they are marked as built-in in settings
+        self.assertIn("Total", self.db.data["settings"]["builtin_profiles"])
+        self.assertIn("Desktop", self.db.data["settings"]["builtin_profiles"])
+        self.assertIn("Gaming", self.db.data["settings"]["builtin_profiles"])
+
+    def test_total_profile_aggregation(self):
+        """Verify that the Total profile aggregates data from all non-Total profiles."""
+        # Log keys to Desktop and Gaming
+        self.db.log_key("Desktop", "A")
+        self.db.log_key("Gaming", "B")
+        self.db.log_key("Gaming", "B")
+        
+        # Get stats for Total
+        total_stats = self.db.get_aggregated_stats("Total")
+        
+        # Total should contain the sum of Desktop and Gaming
+        self.assertEqual(total_stats["keys"].get("A"), 1)
+        self.assertEqual(total_stats["keys"].get("B"), 2)
 
     def test_keystroke_logging_and_aggregation(self):
         """Verify that logged keys accumulate correctly in hourly buckets."""
@@ -186,6 +215,56 @@ class TestTypeTraceDatabase(unittest.TestCase):
         mappings = {"code.exe": "Coding", "notepad.exe": "Notes"}
         self.db.set_profile_mappings(mappings)
         self.assertEqual(self.db.get_profile_mappings(), mappings)
+
+    def test_process_classification(self):
+        """Verify process automatic classification heuristics."""
+        import utils
+        
+        # 1. Definite desktop process (should return "desktop")
+        res_desktop = utils.classify_process("explorer.exe")
+        self.assertEqual(res_desktop, "desktop")
+        
+        res_chrome = utils.classify_process("chrome.exe")
+        self.assertEqual(res_chrome, "desktop")
+        
+        # 2. Test cache functionality
+        utils._classify_cache["test_dummy_game.exe"] = ("gaming", utils.time.time())
+        res_cached = utils.classify_process("test_dummy_game.exe")
+        self.assertEqual(res_cached, "gaming")
+
+    def test_recent_processes_list(self):
+        """Verify settings['recent_processes'] upsert and trim functionality."""
+        self.db.log_process_seen("chrome.exe", "Desktop")
+        self.db.log_process_seen("game.exe", "Gaming")
+        
+        # Manually set timestamps to guarantee deterministic sort order
+        for entry in self.db.data["settings"]["recent_processes"]:
+            if entry["process_name"] == "game.exe":
+                entry["last_seen"] = "2026-06-07 18:00:00"
+            elif entry["process_name"] == "chrome.exe":
+                entry["last_seen"] = "2026-06-07 17:00:00"
+        self.db.save_data()
+        
+        recent = self.db.get_recent_processes(limit=5)
+        self.assertEqual(len(recent), 2)
+        
+        # Latest first
+        self.assertEqual(recent[0]["process_name"], "game.exe")
+        self.assertEqual(recent[0]["category"], "Gaming")
+        self.assertEqual(recent[1]["process_name"], "chrome.exe")
+        self.assertEqual(recent[1]["category"], "Desktop")
+        
+        # Upsert
+        self.db.log_process_seen("chrome.exe", "Coding")
+        for entry in self.db.data["settings"]["recent_processes"]:
+            if entry["process_name"] == "chrome.exe":
+                entry["last_seen"] = "2026-06-07 19:00:00"
+        self.db.save_data()
+        
+        recent_updated = self.db.get_recent_processes(limit=5)
+        self.assertEqual(len(recent_updated), 2)
+        self.assertEqual(recent_updated[0]["process_name"], "chrome.exe")
+        self.assertEqual(recent_updated[0]["category"], "Coding")
 
 if __name__ == "__main__":
     unittest.main()

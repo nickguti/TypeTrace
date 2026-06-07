@@ -11,11 +11,10 @@ import webbrowser
 
 import utils
 from overlay import FloatingOverlay
-
+from tracker import BUILTIN_GAMING_PROCESSES, BUILTIN_DESKTOP_PROCESSES
 # App Constants
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_GITHUB = "https://github.com/nickguti/TypeTrace"
-
 # Set appearance mode and theme
 customtkinter.set_appearance_mode("dark")
 customtkinter.set_default_color_theme("blue")
@@ -39,6 +38,18 @@ TEXT_SECONDARY = "#8E9297"
 GRID_LINE = "#1F2330"
 
 FONT_FAMILY = "Inter"
+
+# Helper to resolve profile emoji based on type
+def get_profile_emoji(profile_name):
+    name_lower = profile_name.lower()
+    if name_lower == "gaming":
+        return "🎮"
+    elif name_lower == "desktop":
+        return "🖥️"
+    elif name_lower == "total":
+        return "🌐"
+    else:
+        return "👤"
 
 # =====================================================================
 # Rounded Rectangle Canvas Helper (High Performance Polygon)
@@ -419,7 +430,7 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
         self.db = db
         
         self.title("Configure Process Mappings")
-        self.geometry("450x450")
+        self.geometry("450x600")
         self.resizable(False, False)
         self.attributes("-topmost", True)
         self.transient(parent)
@@ -456,8 +467,10 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
         profile_lbl = customtkinter.CTkLabel(add_frame, text="Profile:", font=(FONT_FAMILY, 10), text_color=TEXT_SECONDARY)
         profile_lbl.grid(row=0, column=2, padx=8, pady=10, sticky="w")
         
+        # Filter profiles to exclude "Total" since Total never receives direct keystrokes!
+        profile_choices = [p for p in self.db.get_profiles() if p != "Total"]
         self.profile_combo = customtkinter.CTkComboBox(
-            add_frame, values=self.db.get_profiles(), width=100,
+            add_frame, values=profile_choices, width=100,
             fg_color=BG_CARD, border_color=BORDER_COLOR, button_color=KEYCAP_BASE, button_hover_color=KEYCAP_HOVER, text_color=TEXT_PRIMARY,
             dropdown_fg_color=KEYCAP_BASE, dropdown_hover_color=KEYCAP_HOVER, dropdown_text_color=TEXT_PRIMARY,
             font=(FONT_FAMILY, 10)
@@ -470,12 +483,26 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
         )
         add_btn.grid(row=0, column=4, padx=8, pady=10)
         
+        # Mappings list scrollable frame
+        list_title = customtkinter.CTkLabel(frame, text="Custom Mappings", font=(FONT_FAMILY, 12, "bold"), text_color=TEXT_PRIMARY)
+        list_title.pack(pady=(10, 2))
+        
         self.list_frame = customtkinter.CTkScrollableFrame(
-            frame, height=200, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=12
+            frame, height=180, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=12
         )
-        self.list_frame.pack(fill="both", expand=True, padx=15, pady=10)
+        self.list_frame.pack(fill="both", expand=True, padx=15, pady=5)
+        
+        # Recent processes scrollable frame (Requirement 13a)
+        recent_lbl = customtkinter.CTkLabel(frame, text="Recent Processes", font=(FONT_FAMILY, 12, "bold"), text_color=ACCENT)
+        recent_lbl.pack(pady=(10, 2))
+        
+        self.recent_frame = customtkinter.CTkScrollableFrame(
+            frame, height=150, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=12
+        )
+        self.recent_frame.pack(fill="both", expand=True, padx=15, pady=(0, 10))
         
         self.load_mappings()
+        self.load_recent()
         
     def load_mappings(self):
         for widget in self.list_frame.winfo_children():
@@ -486,7 +513,15 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
             row_frame = customtkinter.CTkFrame(self.list_frame, fg_color=KEYCAP_BASE, border_color=BORDER_COLOR, border_width=1, corner_radius=8)
             row_frame.pack(fill="x", pady=2, padx=2)
             
-            lbl = customtkinter.CTkLabel(row_frame, text=f"{proc}  ➜  {prof}", font=("Consolas", 10, "bold"), text_color=TEXT_PRIMARY, anchor="w")
+            # Check if this custom mapping is for a built-in process (auto-detected)
+            is_builtin_gaming = proc.lower() in BUILTIN_GAMING_PROCESSES
+            is_builtin_desktop = proc.lower() in BUILTIN_DESKTOP_PROCESSES
+            
+            lbl_type = "auto-detected" if (is_builtin_gaming or is_builtin_desktop) else "custom"
+            lbl_text = f"{proc}  ➜  {prof} ({lbl_type})"
+            lbl_font = (FONT_FAMILY, 10, "italic") if (is_builtin_gaming or is_builtin_desktop) else ("Consolas", 10, "bold")
+            
+            lbl = customtkinter.CTkLabel(row_frame, text=lbl_text, font=lbl_font, text_color=TEXT_PRIMARY, anchor="w")
             lbl.pack(side="left", padx=10, pady=5)
             
             del_btn = customtkinter.CTkButton(
@@ -494,6 +529,45 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
                 command=lambda p=proc: self.delete_mapping(p)
             )
             del_btn.pack(side="right", padx=10, pady=5)
+
+    def load_recent(self):
+        for widget in self.recent_frame.winfo_children():
+            widget.destroy()
+            
+        recent = self.db.get_recent_processes(limit=5)
+        
+        for entry in recent:
+            if not isinstance(entry, dict):
+                continue
+            proc = entry.get("process_name", "")
+            category = entry.get("category", "Unknown")
+            
+            row_frame = customtkinter.CTkFrame(self.recent_frame, fg_color=KEYCAP_BASE, border_color=BORDER_COLOR, border_width=1, corner_radius=8)
+            row_frame.pack(fill="x", pady=2, padx=2)
+            
+            # Label: Process name + auto-detected category in gray
+            lbl_text = f"{proc}  ({category})"
+            lbl = customtkinter.CTkLabel(row_frame, text=lbl_text, font=(FONT_FAMILY, 10, "italic"), text_color=TEXT_SECONDARY, anchor="w")
+            lbl.pack(side="left", padx=10, pady=5)
+            
+            btn_frame = customtkinter.CTkFrame(row_frame, fg_color="transparent")
+            btn_frame.pack(side="right", padx=5)
+            
+            # "→ Gaming" button
+            g_btn = customtkinter.CTkButton(
+                btn_frame, text="→ Gaming", width=70, height=22, fg_color=KEYCAP_BASE, hover_color=ACCENT, 
+                text_color=TEXT_PRIMARY, font=(FONT_FAMILY, 9, "bold"),
+                command=lambda p=proc: self.quick_map(p, "Gaming")
+            )
+            g_btn.pack(side="left", padx=2, pady=2)
+            
+            # "→ Desktop" button
+            d_btn = customtkinter.CTkButton(
+                btn_frame, text="→ Desktop", width=70, height=22, fg_color=KEYCAP_BASE, hover_color=ACCENT, 
+                text_color=TEXT_PRIMARY, font=(FONT_FAMILY, 9, "bold"),
+                command=lambda p=proc: self.quick_map(p, "Desktop")
+            )
+            d_btn.pack(side="left", padx=2, pady=2)
             
     def add_mapping(self):
         proc = self.process_entry.get().strip().lower()
@@ -514,6 +588,13 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
         self.db.set_profile_mappings(mappings)
         self.process_entry.delete(0, tk.END)
         self.load_mappings()
+        self.load_recent()
+        
+    def quick_map(self, process_name, profile_name):
+        self.process_entry.delete(0, tk.END)
+        self.process_entry.insert(0, process_name)
+        self.profile_combo.set(profile_name)
+        self.add_mapping()
 
     def delete_mapping(self, proc):
         mappings = self.db.get_profile_mappings()
@@ -521,6 +602,7 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
             del mappings[proc]
             self.db.set_profile_mappings(mappings)
             self.load_mappings()
+            self.load_recent()
 
 # =====================================================================
 # About Dialog
@@ -596,6 +678,7 @@ class TypeTraceUI(customtkinter.CTk):
         self._is_updating = False
         self._key_color_cache = {}  # Color cache to stop bulk redraws (STEP 2)
         self._heatmap_loop_started = False
+        self.viewing_profile = self.tracker.active_profile
         
         self.incognito_var = tk.BooleanVar(value=self.tracker.incognito_mode)
         self.heatmap_var = tk.BooleanVar(value=False)
@@ -612,6 +695,9 @@ class TypeTraceUI(customtkinter.CTk):
             self.after(500, self.toggle_overlay)
             
         self.run_background_updates()
+        
+        # Set up UI states for profile view buttons (Requirement 10)
+        self.update_profile_selector_ui()
         
         self._pulse_status_dot()
         
@@ -686,10 +772,11 @@ class TypeTraceUI(customtkinter.CTk):
         self.status_dot_canvas.pack(side="left", padx=(0, 6))
         self.status_dot = self.status_dot_canvas.create_oval(1, 1, 11, 11, fill=ACCENT, outline="")
         
-        self.status_text = customtkinter.CTkLabel(
-            self.status_indicator_frame, text="Tracking", font=(FONT_FAMILY, 10, "bold"), text_color=ACCENT
+        # Active Process Indicator (Requirement 20)
+        self.proc_label = customtkinter.CTkLabel(
+            self.status_indicator_frame, text="● Tracking", font=(FONT_FAMILY, 9), text_color=TEXT_SECONDARY
         )
-        self.status_text.pack(side="left")
+        self.proc_label.pack(side="left", padx=(4, 0))
 
         self.about_btn = customtkinter.CTkButton(
             self.header_right, text="?", width=32, height=32,
@@ -759,39 +846,60 @@ class TypeTraceUI(customtkinter.CTk):
         self.config_title = customtkinter.CTkLabel(self.config_card, text="⚙️ CONFIGURATION", font=(FONT_FAMILY, 12, "bold"), text_color=TEXT_PRIMARY)
         self.config_title.pack(anchor="w", padx=15, pady=(12, 8))
 
+        # Profile selection redesign occupying full width of card (Requirement 10)
+        self.profile_lbl = customtkinter.CTkLabel(self.config_card, text="Select Profile (Stats View):", font=(FONT_FAMILY, 10), text_color=TEXT_SECONDARY)
+        self.profile_lbl.pack(anchor="w", padx=15, pady=(0, 2))
+
+        self.profile_row = customtkinter.CTkFrame(self.config_card, fg_color="transparent")
+        self.profile_row.pack(fill="x", padx=15, pady=(0, 6))
+
+        # Icon buttons for built-in profiles (Total, Desktop, Gaming)
+        self.btn_total = customtkinter.CTkButton(
+            self.profile_row, text="🌐 Total", width=75, height=26, corner_radius=8, font=(FONT_FAMILY, 10),
+            command=lambda: self._set_viewing_profile("Total")
+        )
+        self.btn_total.pack(side="left", padx=2)
+
+        self.btn_desktop = customtkinter.CTkButton(
+            self.profile_row, text="🖥️ Desktop", width=75, height=26, corner_radius=8, font=(FONT_FAMILY, 10),
+            command=lambda: self._set_viewing_profile("Desktop")
+        )
+        self.btn_desktop.pack(side="left", padx=2)
+
+        self.btn_gaming = customtkinter.CTkButton(
+            self.profile_row, text="🎮 Gaming", width=75, height=26, corner_radius=8, font=(FONT_FAMILY, 10),
+            command=lambda: self._set_viewing_profile("Gaming")
+        )
+        self.btn_gaming.pack(side="left", padx=2)
+
+        # Combobox for custom profiles
+        self.profile_combobox = customtkinter.CTkComboBox(
+            self.profile_row, values=self.get_custom_profiles(), command=self.on_custom_profile_selected, width=100, height=28,
+            font=(FONT_FAMILY, 10), fg_color=KEYCAP_BASE, border_color=BORDER_COLOR, button_color=KEYCAP_BASE, button_hover_color=KEYCAP_HOVER,
+            text_color=TEXT_PRIMARY, dropdown_fg_color=KEYCAP_BASE, dropdown_hover_color=KEYCAP_HOVER, dropdown_text_color=TEXT_PRIMARY
+        )
+        self.profile_combobox.set("custom ▾")
+        self.profile_combobox.pack(side="left", padx=(6, 2))
+
+        self.add_profile_btn = customtkinter.CTkButton(
+            self.profile_row, text="+", width=26, height=28, fg_color=KEYCAP_BASE, hover_color=ACCENT, text_color=TEXT_PRIMARY, font=(FONT_FAMILY, 12, "bold"), command=self.create_profile_dialog
+        )
+        self.add_profile_btn.pack(side="left", padx=2)
+
+        self.del_profile_btn = customtkinter.CTkButton(
+            self.profile_row, text="🗑", width=26, height=28, fg_color=KEYCAP_BASE, hover_color=DANGER, text_color=TEXT_PRIMARY, font=(FONT_FAMILY, 11, "bold"), command=self.delete_active_profile
+        )
+        # Delete button visibility managed in update_profile_selector_ui
+
         self.config_inner = customtkinter.CTkFrame(self.config_card, fg_color="transparent")
         self.config_inner.pack(fill="both", expand=True, padx=15, pady=(0, 8))
 
         self.config_inner.columnconfigure(0, weight=1, uniform="config_cols")
         self.config_inner.columnconfigure(1, weight=1, uniform="config_cols")
 
-        # Left Column - Profiles & Theme
+        # Left Column - Theme only
         self.config_left = customtkinter.CTkFrame(self.config_inner, fg_color="transparent")
         self.config_left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-
-        self.profile_lbl = customtkinter.CTkLabel(self.config_left, text="Active Profile:", font=(FONT_FAMILY, 10), text_color=TEXT_SECONDARY)
-        self.profile_lbl.pack(anchor="w", pady=(0, 2))
-
-        self.profile_row = customtkinter.CTkFrame(self.config_left, fg_color="transparent")
-        self.profile_row.pack(fill="x", pady=(0, 6))
-
-        self.profile_combobox = customtkinter.CTkComboBox(
-            self.profile_row, values=self.db.get_profiles(), command=self.change_profile, width=110, height=26,
-            font=(FONT_FAMILY, 10), fg_color=KEYCAP_BASE, border_color=BORDER_COLOR, button_color=KEYCAP_BASE, button_hover_color=KEYCAP_HOVER,
-            text_color=TEXT_PRIMARY, dropdown_fg_color=KEYCAP_BASE, dropdown_hover_color=KEYCAP_HOVER, dropdown_text_color=TEXT_PRIMARY
-        )
-        self.profile_combobox.set(self.tracker.active_profile)
-        self.profile_combobox.pack(side="left", padx=(0, 4))
-
-        self.add_profile_btn = customtkinter.CTkButton(
-            self.profile_row, text="+", width=24, height=26, fg_color=KEYCAP_BASE, hover_color=ACCENT, text_color=TEXT_PRIMARY, font=(FONT_FAMILY, 12, "bold"), command=self.create_profile_dialog
-        )
-        self.add_profile_btn.pack(side="left", padx=2)
-
-        self.del_profile_btn = customtkinter.CTkButton(
-            self.profile_row, text="🗑", width=24, height=26, fg_color=KEYCAP_BASE, hover_color=DANGER, text_color=TEXT_PRIMARY, font=(FONT_FAMILY, 11, "bold"), command=self.delete_active_profile
-        )
-        self.del_profile_btn.pack(side="left", padx=2)
 
         self.theme_lbl = customtkinter.CTkLabel(self.config_left, text="Heatmap Theme:", font=(FONT_FAMILY, 10), text_color=TEXT_SECONDARY)
         self.theme_lbl.pack(anchor="w", pady=(0, 2))
@@ -1259,7 +1367,7 @@ class TypeTraceUI(customtkinter.CTk):
             self.tooltip_window = None
 
     def get_key_tooltip_text(self, db_key):
-        stats = self.db.get_key_stats(self.tracker.active_profile, db_key)
+        stats = self.db.get_key_stats(self.viewing_profile, db_key)
         
         key_label = db_key
         if db_key == "Space": key_label = "Spacebar"
@@ -1297,9 +1405,9 @@ class TypeTraceUI(customtkinter.CTk):
             f"• Next key (Bigram): {stats['bigram']}"
         )
 
-    # =====================================================================
-    # Heatmap Theming & Color Calculation
-    # =====================================================================
+# =====================================================================
+# Heatmap Theming & Color Calculation
+# =====================================================================
     def toggle_heatmap(self):
         self._is_updating = True
         
@@ -1340,7 +1448,7 @@ class TypeTraceUI(customtkinter.CTk):
         if not self.heatmap_var.get():
             return  # don't refresh if heatmap is off
             
-        aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
+        aggregated = self.db.get_aggregated_stats(self.viewing_profile)
         keys_counts = aggregated.get("keys", {})
         
         visible_counts = []
@@ -1386,7 +1494,7 @@ class TypeTraceUI(customtkinter.CTk):
 
     def get_key_target_color(self, key_name):
         if self.heatmap_var.get():
-            aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
+            aggregated = self.db.get_aggregated_stats(self.viewing_profile)
             keys_counts = aggregated.get("keys", {})
             
             visible_counts = []
@@ -1531,16 +1639,21 @@ class TypeTraceUI(customtkinter.CTk):
             
             session_dur = self.tracker.get_session_duration()
             self.session_time_lbl.configure(text=session_dur)
-            self.session_keys_lbl.configure(text=f"Keys: {self.tracker.session_total_clicks}")
             
-            total_clicks = self.tracker.session_total_clicks
-            backspace_clicks = self.tracker.session_backspace_clicks
+            # Leaderboard & stats calculations read from viewing_profile (Requirement 12)
+            aggregated = self.db.get_aggregated_stats(self.viewing_profile)
+            
+            total_keys = sum(aggregated.get("keys", {}).values())
+            self.session_keys_lbl.configure(text=f"Keys: {total_keys}")
+            
+            keys_data = aggregated.get("keys", {})
+            total_clicks = sum(keys_data.values())
+            backspace_clicks = keys_data.get("Backspace", 0) + keys_data.get("Delete", 0)
             ratio = (backspace_clicks / total_clicks) * 100 if total_clicks > 0 else 0.0
             self.error_ratio_lbl.configure(text=f"⌫ Ratio: {ratio:.1f}%")
             
             # Leaderboard
-            aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
-            sorted_keys = sorted(aggregated.get("keys", {}).items(), key=lambda x: x[1], reverse=True)[:len(self.top_keys_labels)]
+            sorted_keys = sorted(keys_data.items(), key=lambda x: x[1], reverse=True)[:len(self.top_keys_labels)]
             for idx in range(len(self.top_keys_labels)):
                 lbl = self.top_keys_labels[idx]
                 if idx < len(sorted_keys):
@@ -1562,7 +1675,7 @@ class TypeTraceUI(customtkinter.CTk):
                     lbl.configure(text=f"{idx+1}. —")
                     
             # Bursts
-            bursts = self.db.get_burst_records(self.tracker.active_profile)
+            bursts = self.db.get_burst_records(self.viewing_profile)
             self.total_bursts_lbl.configure(text=f"{len(bursts)} recorded")
             for idx in range(len(self.burst_labels)):
                 lbl = self.burst_labels[idx]
@@ -1572,9 +1685,9 @@ class TypeTraceUI(customtkinter.CTk):
                 else:
                     lbl.configure(text=f"{idx+1}. —")
                     
-            # Chart
-            profile = self.tracker.active_profile
-            hourly_data = self.db.data.get("profiles", {}).get(profile, {}).get("hourly", {})
+            # Chart (read from get_stats_for_profile)
+            profile_data = self.db.get_stats_for_profile(self.viewing_profile)
+            hourly_data = profile_data.get("hourly", {})
             self.chart_canvas.draw_chart(hourly_data)
             
             if self.overlay:
@@ -1589,10 +1702,15 @@ class TypeTraceUI(customtkinter.CTk):
                 
             if self.incognito_var.get():
                 self.status_left_lbl.configure(text="System Status: Incognito Active", text_color=DANGER)
-                self.status_text.configure(text="Incognito", text_color=DANGER)
             else:
                 self.status_left_lbl.configure(text="System Status: Tracking Active", text_color=ACCENT)
-                self.status_text.configure(text="Tracking", text_color=ACCENT)
+                
+            # Process Indicator (Requirement 20)
+            proc = self.tracker.last_detected_process
+            active = self.tracker.active_profile
+            icon = "🎮" if active == "Gaming" else "🖥️" if active == "Desktop" else "●"
+            text_val = f"{icon} {proc} → {active}" if proc else "● Tracking"
+            self.proc_label.configure(text=text_val)
                 
         except Exception as e:
             logging.exception(f"Error updating UI stats: {e}")
@@ -1639,12 +1757,70 @@ class TypeTraceUI(customtkinter.CTk):
             self.after(2000, self._refresh_heatmap_colors)
 
     # =====================================================================
+    # Profile Selector Utilities (Requirement 10 & 12)
+    # =====================================================================
+    def get_custom_profiles(self):
+        """Returns the list of custom profiles (excluding built-in profiles)."""
+        return [p for p in self.db.get_profiles() if p not in ("Total", "Desktop", "Gaming")]
+
+    def update_profile_selector_ui(self):
+        """Updates the styling and configuration of the profile buttons and combobox."""
+        profile = self.viewing_profile
+        
+        # Total button
+        if profile == "Total":
+            self.btn_total.configure(fg_color=ACCENT, text_color=BG_MAIN, font=(FONT_FAMILY, 10, "bold"))
+        else:
+            self.btn_total.configure(fg_color=KEYCAP_BASE, text_color=TEXT_SECONDARY, font=(FONT_FAMILY, 10))
+            
+        # Desktop button
+        if profile == "Desktop":
+            self.btn_desktop.configure(fg_color=ACCENT, text_color=BG_MAIN, font=(FONT_FAMILY, 10, "bold"))
+        else:
+            self.btn_desktop.configure(fg_color=KEYCAP_BASE, text_color=TEXT_SECONDARY, font=(FONT_FAMILY, 10))
+            
+        # Gaming button
+        if profile == "Gaming":
+            self.btn_gaming.configure(fg_color=ACCENT, text_color=BG_MAIN, font=(FONT_FAMILY, 10, "bold"))
+        else:
+            self.btn_gaming.configure(fg_color=KEYCAP_BASE, text_color=TEXT_SECONDARY, font=(FONT_FAMILY, 10))
+            
+        # Update combobox options and value
+        custom_profiles = self.get_custom_profiles()
+        self.profile_combobox.configure(values=custom_profiles)
+        
+        if profile in ("Total", "Desktop", "Gaming"):
+            self.profile_combobox.set("custom ▾")
+            self.del_profile_btn.pack_forget()
+        else:
+            self.profile_combobox.set(profile)
+            # Re-pack trash delete button next to custom combobox
+            self.del_profile_btn.pack(side="left", padx=2)
+
+    def _set_viewing_profile(self, name):
+        """Sets the viewing profile, updates active states, and updates UI stats."""
+        self.viewing_profile = name
+        self.update_profile_selector_ui()
+        self.update_heatmap_colors()
+        self.update_ui_stats()
+
+    def switch_viewing_profile(self, profile_name):
+        """Switches only the display stats VIEW to the selected profile."""
+        self._set_viewing_profile(profile_name)
+
+    def on_custom_profile_selected(self, profile_name):
+        """Triggered when a custom profile is picked in the combobox."""
+        if profile_name == "custom ▾":
+            return
+        self._set_viewing_profile(profile_name)
+
+    # =====================================================================
     # Profile Management
     # =====================================================================
     def change_profile(self, profile_name):
-        self.tracker.set_profile(profile_name)
-        self.db.set_last_profile(profile_name)
-        self.update_heatmap_colors()
+        # Triggered by tracker background thread auto-switching event
+        # Do NOT override self.viewing_profile automatically — the user may be
+        # viewing a different profile intentionally. Only update indicators.
         self.update_ui_stats()
 
     def create_profile_dialog(self):
@@ -1653,16 +1829,20 @@ class TypeTraceUI(customtkinter.CTk):
         if name:
             name = name.strip()
             if self.db.create_profile(name):
-                self.profile_combobox.configure(values=self.db.get_profiles())
-                self.profile_combobox.set(name)
-                self.change_profile(name)
+                self.viewing_profile = name
+                self.tracker.set_profile(name)
+                self.db.set_last_profile(name)
+                self.update_profile_selector_ui()
+                self.update_heatmap_colors()
+                self.update_ui_stats()
+                ToastNotification(self, f"Profile '{name}' created.", "success")
             else:
                 ToastNotification(self, "Profile name empty or already exists.", "error")
 
     def delete_active_profile(self):
-        profile = self.tracker.active_profile
-        if profile == "Default":
-            ToastNotification(self, "Cannot delete the Default profile.", "error")
+        profile = self.viewing_profile
+        if profile in ("Default", "Total", "Desktop", "Gaming"):
+            ToastNotification(self, "Cannot delete protected profiles.", "error")
             return
             
         confirm = messagebox.askyesno(
@@ -1671,10 +1851,12 @@ class TypeTraceUI(customtkinter.CTk):
         )
         if confirm:
             self.db.delete_profile(profile)
-            profiles = self.db.get_profiles()
-            self.profile_combobox.configure(values=profiles)
-            self.profile_combobox.set("Default")
-            self.change_profile("Default")
+            self.viewing_profile = "Default"
+            self.tracker.set_profile("Default")
+            self.db.set_last_profile("Default")
+            self.update_profile_selector_ui()
+            self.update_heatmap_colors()
+            self.update_ui_stats()
             ToastNotification(self, f"Profile '{profile}' deleted.", "success")
 
     # =====================================================================
@@ -1722,10 +1904,10 @@ class TypeTraceUI(customtkinter.CTk):
             defaultextension=".csv",
             filetypes=[("CSV Files", "*.csv")],
             title="Export Profile Statistics to CSV",
-            initialfile=f"typetrace_{self.tracker.active_profile.lower()}_stats.csv"
+            initialfile=f"typetrace_{self.viewing_profile.lower()}_stats.csv"
         )
         if filepath:
-            aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
+            aggregated = self.db.get_aggregated_stats(self.viewing_profile)
             if utils.export_stats_to_csv(filepath, aggregated):
                 ToastNotification(self, f"CSV exported successfully!", "success")
             else:
@@ -1736,11 +1918,11 @@ class TypeTraceUI(customtkinter.CTk):
             defaultextension=".json",
             filetypes=[("JSON Files", "*.json")],
             title="Export Profile Statistics to JSON",
-            initialfile=f"typetrace_{self.tracker.active_profile.lower()}_stats.json"
+            initialfile=f"typetrace_{self.viewing_profile.lower()}_stats.json"
         )
         if filepath:
             try:
-                aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
+                aggregated = self.db.get_aggregated_stats(self.viewing_profile)
                 with open(filepath, 'w', encoding='utf-8') as f:
                     json.dump(aggregated, f, indent=4)
                 ToastNotification(self, f"JSON exported successfully!", "success")
@@ -1750,15 +1932,15 @@ class TypeTraceUI(customtkinter.CTk):
     def reset_statistics_dialog(self):
         confirm = messagebox.askyesno(
             "Reset Statistics", 
-            f"Are you sure you want to clear statistics for profile '{self.tracker.active_profile}'?\n"
+            f"Are you sure you want to clear statistics for profile '{self.viewing_profile}'?\n"
             "This action cannot be undone."
         )
         if confirm:
             self._key_color_cache = {}  # Clear cache on reset (STEP 2)
-            self.db.reset_profile_statistics(self.tracker.active_profile)
+            self.db.reset_profile_statistics(self.viewing_profile)
             self.update_heatmap_colors()
             self.update_ui_stats()
-            ToastNotification(self, f"Statistics for '{self.tracker.active_profile}' reset.", "success")
+            ToastNotification(self, f"Statistics for '{self.viewing_profile}' reset.", "success")
 
     # =====================================================================
     # Window Management
@@ -1771,8 +1953,8 @@ class TypeTraceUI(customtkinter.CTk):
 
     def mostra_finestra(self):
         self.deiconify()
-        self.lift()
         self.focus_force()
+        self.lift()
 
     # =====================================================================
     # Thread-Safe Event Queue Processing
@@ -1809,7 +1991,6 @@ class TypeTraceUI(customtkinter.CTk):
             elif event_type == "burst_detected":
                 self.update_ui_stats()
             elif event_type == "profile_changed":
-                self.profile_combobox.set(val)
                 self.change_profile(val)
             elif event_type == "exit":
                 if self.shutdown_callback:

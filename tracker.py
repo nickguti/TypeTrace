@@ -1,9 +1,62 @@
 import time
 import logging
 import threading
+import ctypes
 from pynput import keyboard
 
 import utils
+
+BUILTIN_GAMING_PROCESSES = {
+    "steam.exe", "epicgameslauncher.exe", "leagueoflegends.exe", "valorant.exe",
+    "csgo.exe", "cs2.exe", "minecraft.exe", "fortnite.exe", "robloxplayerbeta.exe",
+    "r5apex.exe", "overwatch.exe", "destiny2.exe", "eldenring.exe", "cyberpunk2077.exe",
+    "witcher3.exe", "gta5.exe", "rockstargameslauncher.exe", "battlenet.exe",
+    "pathofexile.exe", "dota2.exe", "among_us.exe", "terraria.exe",
+    "stardewvalley.exe", "re2.exe", "re3.exe", "re4.exe", "sekiro.exe",
+    "fallout4.exe", "skyrim.exe", "skyrimse.exe", "newvegasLauncher.exe"
+}
+
+BUILTIN_DESKTOP_PROCESSES = {
+    "chrome.exe", "firefox.exe", "msedge.exe", "opera.exe", "brave.exe",
+    "code.exe", "cursor.exe", "pycharm64.exe", "idea64.exe", "webstorm64.exe",
+    "sublime_text.exe", "notepad.exe", "notepad++.exe", "wordpad.exe",
+    "winword.exe", "excel.exe", "powerpnt.exe", "onenote.exe",
+    "outlook.exe", "thunderbird.exe", "slack.exe", "discord.exe", "teams.exe",
+    "zoom.exe", "telegram.exe", "whatsapp.exe", "signal.exe",
+    "explorer.exe", "cmd.exe", "powershell.exe", "windowsterminal.exe",
+    "wt.exe", "obsidian.exe", "notion.exe", "figma.exe", "xd.exe",
+    "photoshop.exe", "illustrator.exe", "premiere.exe", "afterfx.exe",
+    "spotify.exe", "vlc.exe"
+}
+
+def get_active_window_title():
+    """Fetches the window title of the foreground active window using ctypes."""
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return ""
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+        return buf.value
+    except Exception:
+        return ""
+
+def is_gaming_by_heuristic(process_name, title):
+    """Secondary heuristic to identify gaming process based on non-productivity window title keywords."""
+    if not title:
+        return False
+    title_lower = title.lower()
+    productivity_keywords = [
+        "code", "visual studio", "pycharm", "eclipse", "editor", "document", "spreadsheet", 
+        "workbook", "presentation", "onenote", "outlook", "mail", "browser", "slack", 
+        "discord", "teams", "zoom", "meet", "workspace", "folder", "explorer", "github", 
+        "notion", "obsidian", "photoshop", "illustrator", "premiere", "figma", "pdf",
+        "chrome", "firefox", "edge", "opera", "brave", "safari"
+    ]
+    return not any(kw in title_lower for kw in productivity_keywords)
 
 class KeystrokeTracker:
     def __init__(self, db, ui_update_callback=None):
@@ -13,6 +66,8 @@ class KeystrokeTracker:
         # State variables
         self.active_profile = self.db.get_last_profile()
         self.incognito_mode = False
+        self.last_detected_process = ""
+        self.last_detected_category = "Unknown"
         
         # Modifier tracking
         self.pressed_modifiers = {
@@ -312,16 +367,28 @@ class KeystrokeTracker:
             if iteration % 2 == 0:
                 try:
                     proc_name = utils.get_active_window_process_name()
-                    if proc_name:
-                        proc_name_lower = proc_name.lower()
+                    if proc_name and proc_name.lower() != self.last_detected_process.lower():
+                        self.last_detected_process = proc_name
+                        proc_lower = proc_name.lower()
+
+                        # Priority 1: user's custom mappings
                         mappings = self.db.get_profile_mappings()
-                        if proc_name_lower in mappings:
-                            target_profile = mappings[proc_name_lower]
-                            # Make sure target profile exists and is different
-                            if target_profile in self.db.get_profiles() and target_profile != self.active_profile:
-                                self.set_profile(target_profile)
-                                self.db.set_last_profile(target_profile)
-                                if self.ui_update_callback:
-                                    self.ui_update_callback("profile_changed", target_profile)
+                        if proc_lower in mappings:
+                            target_profile = mappings[proc_lower]
+                        # Priority 2: auto-classify
+                        else:
+                            category = utils.classify_process(proc_name)
+                            target_profile = "Gaming" if category == "gaming" else "Desktop"
+
+                        # Log to recent processes
+                        self.db.log_process_seen(proc_name, target_profile)
+
+                        # Switch profile if changed
+                        if target_profile in self.db.get_profiles() and target_profile != self.active_profile:
+                            self.set_profile(target_profile)
+                            self.db.set_last_profile(target_profile)
+                            if self.ui_update_callback:
+                                self.ui_update_callback("profile_changed", target_profile)
                 except Exception as e:
                     logging.exception(f"Error in active window monitoring loop: {e}")
+

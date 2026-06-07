@@ -4,6 +4,8 @@ import csv
 import shutil
 import subprocess
 import ctypes
+import time
+import concurrent.futures
 
 def interpolate_color(val, theme="Classic"):
     """
@@ -257,4 +259,189 @@ def get_active_window_process_name():
         return name if name else None
     except Exception:
         return None
+
+# Game detection variables
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_classify_cache = {}
+CACHE_EXPIRY = 30
+
+def _scan_psutil_info(process_name):
+    """Slow scan using psutil to find target process details and memory mapped DLLs."""
+    try:
+        import psutil
+        proc_lower = process_name.lower()
+        
+        for proc in psutil.process_iter(['name', 'pid', 'exe', 'ppid']):
+            try:
+                if proc.info['name'] and proc.info['name'].lower() == proc_lower:
+                    pid = proc.info['pid']
+                    exe_path = proc.info.get('exe') or ""
+                    ppid = proc.info.get('ppid')
+                    
+                    # Memory map query for loaded DLLs
+                    dlls = []
+                    try:
+                        p = psutil.Process(pid)
+                        dlls = [m.path.lower() for m in p.memory_maps()]
+                    except Exception:
+                        pass
+                        
+                    # Parent name retrieval
+                    parent_name = ""
+                    if ppid is not None:
+                        try:
+                            parent = psutil.Process(ppid)
+                            parent_name = parent.name()
+                        except Exception:
+                            pass
+                            
+                    return {
+                        "found": True,
+                        "exe_path": exe_path,
+                        "parent_name": parent_name,
+                        "dlls": dlls
+                    }
+            except Exception:
+                pass
+    except Exception:
+        pass
+        
+    return {
+        "found": False,
+        "exe_path": "",
+        "parent_name": "",
+        "dlls": []
+    }
+
+def classify_process(process_name, hwnd=None) -> str:
+    """
+    Returns "gaming" or "desktop".
+    Uses multiple heuristics combined into a confidence score.
+    """
+    try:
+        proc_lower = process_name.lower()
+        now = time.time()
+        
+        # 1. Check cache first
+        if proc_lower in _classify_cache:
+            cached_result, cached_time = _classify_cache[proc_lower]
+            if now - cached_time < CACHE_EXPIRY:
+                return cached_result
+                
+        score = 0
+        
+        # Submit psutil scan to background thread pool
+        future = _executor.submit(_scan_psutil_info, process_name)
+        try:
+            slow_info = future.result(timeout=0.5)
+        except Exception:
+            slow_info = {
+                "found": False,
+                "exe_path": "",
+                "parent_name": "",
+                "dlls": []
+            }
+            
+        # --- SIGNAL 1: Graphics API detection (+40 pts) ---
+        game_dlls = ['d3d9.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'vulkan-1.dll', 'dxgi.dll']
+        for dll in game_dlls:
+            if any(dll in path for path in slow_info.get("dlls", [])):
+                score += 40
+                break
+                
+        # --- SIGNAL 2: Fullscreen/Borderless window detection (+25 pts / +10 pts) ---
+        try:
+            import ctypes
+            import ctypes.wintypes
+            user32 = ctypes.windll.user32
+            target_hwnd = hwnd
+            if target_hwnd is None:
+                target_hwnd = user32.GetForegroundWindow()
+            if target_hwnd:
+                rect = ctypes.wintypes.RECT()
+                user32.GetWindowRect(target_hwnd, ctypes.byref(rect))
+                screen_w = user32.GetSystemMetrics(0)
+                screen_h = user32.GetSystemMetrics(1)
+                win_w = rect.right - rect.left
+                win_h = rect.bottom - rect.top
+                covers_screen = (win_w >= screen_w * 0.95 and win_h >= screen_h * 0.95)
+
+                GWL_STYLE = -16
+                WS_POPUP = 0x80000000
+                WS_CAPTION = 0x00C00000
+                style = user32.GetWindowLongW(target_hwnd, GWL_STYLE)
+                is_borderless = bool(style & WS_POPUP) and not bool(style & WS_CAPTION)
+
+                if covers_screen and is_borderless:
+                    score += 25
+                elif covers_screen:
+                    score += 10
+        except Exception:
+            pass
+            
+        # --- SIGNAL 3: Known game launcher / platform processes (+20 pts) ---
+        gaming_platforms = [
+            "steam.exe", "epicgameslauncher.exe", "gog.exe", "gogalaxy.exe",
+            "battlenet.exe", "riotclientservices.exe", "eadesktop.exe",
+            "ubisoftconnect.exe", "xboxapp.exe", "gamingservices.exe"
+        ]
+        if proc_lower in gaming_platforms:
+            score += 20
+            
+        parent_name = slow_info.get("parent_name", "").lower()
+        if parent_name in gaming_platforms:
+            score += 20
+            
+        # --- SIGNAL 4: Process install path heuristics (+15 pts) ---
+        exe_path = slow_info.get("exe_path", "").lower()
+        if exe_path:
+            exe_path_normalized = exe_path.replace('\\', '/')
+            gaming_paths = [
+                'steamapps', 'epic games', 'gog games', 'ea games', 'riot games',
+                'ubisoft game launcher', 'battle.net', 'xbox games', '/games/'
+            ]
+            if any(p in exe_path_normalized for p in gaming_paths):
+                score += 15
+                
+        # --- SIGNAL 5: No standard window chrome (+10 pts) ---
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            target_hwnd = hwnd
+            if target_hwnd is None:
+                target_hwnd = user32.GetForegroundWindow()
+            if target_hwnd:
+                GWL_STYLE = -16
+                WS_CAPTION = 0x00C00000
+                style = user32.GetWindowLongW(target_hwnd, GWL_STYLE)
+                has_caption = bool(style & WS_CAPTION)
+                if not has_caption:
+                    score += 10
+        except Exception:
+            pass
+            
+        # --- SIGNAL 6: Known non-game processes (-50 pts) ---
+        definite_desktop = [
+            "explorer.exe", "chrome.exe", "firefox.exe", "msedge.exe", "opera.exe",
+            "brave.exe", "code.exe", "cursor.exe", "devenv.exe", "pycharm64.exe",
+            "idea64.exe", "webstorm64.exe", "sublime_text.exe", "notepad.exe",
+            "notepad++.exe", "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe",
+            "slack.exe", "discord.exe", "teams.exe", "zoom.exe", "telegram.exe",
+            "cmd.exe", "powershell.exe", "windowsterminal.exe", "wt.exe",
+            "taskmgr.exe", "regedit.exe", "spotify.exe", "vlc.exe", "obs64.exe"
+        ]
+        if proc_lower in definite_desktop:
+            score -= 50
+            
+        # Classification
+        if score >= 15:
+            result = "gaming"
+        else:
+            result = "desktop"
+            
+        # Cache results
+        _classify_cache[proc_lower] = (result, now)
+        return result
+    except Exception:
+        return "desktop"
 
