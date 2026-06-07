@@ -14,7 +14,7 @@ from overlay import FloatingOverlay
 
 # App Constants
 APP_VERSION = "1.0.0"
-APP_GITHUB = "https://github.com/typetrace/typetrace"
+APP_GITHUB = "https://github.com/nickguti/TypeTrace"
 
 # Set appearance mode and theme
 customtkinter.set_appearance_mode("dark")
@@ -594,6 +594,8 @@ class TypeTraceUI(customtkinter.CTk):
         self._status_pulse_step = 0
         self._resize_job = None
         self._is_updating = False
+        self._key_color_cache = {}  # Color cache to stop bulk redraws (STEP 2)
+        self._heatmap_loop_started = False
         
         self.incognito_var = tk.BooleanVar(value=self.tracker.incognito_mode)
         self.heatmap_var = tk.BooleanVar(value=False)
@@ -610,6 +612,7 @@ class TypeTraceUI(customtkinter.CTk):
             self.after(500, self.toggle_overlay)
             
         self.run_background_updates()
+        
         self._pulse_status_dot()
         
         self.bind("<Configure>", self.on_resize)
@@ -1154,18 +1157,14 @@ class TypeTraceUI(customtkinter.CTk):
             )
 
     # =====================================================================
-    # Layout Switcher (FIX 2 alpha wrapped)
+    # Layout Switcher (Flickerless Redraw)
     # =====================================================================
     def switch_keyboard_layout(self, layout_name):
         self._is_updating = True
-        self.wm_attributes("-alpha", 0)
-        
         self.current_layout = layout_name
         self.draw_keyboard()
         self.update_heatmap_colors()
-        
         self.update_idletasks()
-        self.wm_attributes("-alpha", 1)
         self._is_updating = False
 
     # =====================================================================
@@ -1303,7 +1302,6 @@ class TypeTraceUI(customtkinter.CTk):
     # =====================================================================
     def toggle_heatmap(self):
         self._is_updating = True
-        self.wm_attributes("-alpha", 0)
         
         if self.heatmap_var.get():
             self.heatmap_legend.pack(fill="x", padx=20, pady=(0, 10))
@@ -1315,32 +1313,32 @@ class TypeTraceUI(customtkinter.CTk):
             self._apply_key_colors(color_map)
             
         self.update_idletasks()
-        self.wm_attributes("-alpha", 1)
         self._is_updating = False
 
-    # Single batch key color configuration method (BUG 2 FIXED)
+    # Single batch key color configuration method with cache (BUG 2 FIXED & STEP 2)
     def _apply_key_colors(self, color_map):
-        try:
-            self.wm_attributes("-alpha", 0)
-            for key_id, (bg, fg) in color_map.items():
-                btn = self.key_buttons.get(key_id)
-                if btn:
-                    if hasattr(btn, 'configure'):
-                        btn.configure(fg_color=bg, text_color=fg)
-                    rect_tag = f"rect_{key_id}"
-                    text_tag = f"text_{key_id}"
-                    self.kbd_canvas.itemconfig(rect_tag, fill=bg)
-                    self.kbd_canvas.itemconfig(text_tag, fill=fg)
-            self.update_idletasks()
-        finally:
-            self.wm_attributes("-alpha", 1)
+        for key_id, (bg, fg) in color_map.items():
+            cache_key = (key_id, bg, fg)
+            if self._key_color_cache.get(key_id) == cache_key:
+                continue  # skip redraw entirely if color hasn't changed (STEP 2)
+            self._key_color_cache[key_id] = cache_key
+            
+            btn = self.key_buttons.get(key_id)
+            if btn:
+                if hasattr(btn, 'configure'):
+                    btn.configure(fg_color=bg, text_color=fg)
+                rect_tag = f"rect_{key_id}"
+                text_tag = f"text_{key_id}"
+                self.kbd_canvas.itemconfig(rect_tag, fill=bg)
+                self.kbd_canvas.itemconfig(text_tag, fill=fg)
+                
+        # Flush pending geometry/draw in one batch on keyboard_container (STEP 4)
+        self.keyboard_container.update_idletasks()
 
     def update_heatmap_colors(self):
         """Recalculates colors for all buttons in the virtual keyboard layout (BUG 2 & 3 FIXED)."""
         if not self.heatmap_var.get():
             return  # don't refresh if heatmap is off
-        if self.wm_attributes("-alpha") < 1.0:
-            return  # don't refresh during another update
             
         aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
         keys_counts = aggregated.get("keys", {})
@@ -1379,7 +1377,10 @@ class TypeTraceUI(customtkinter.CTk):
                 
             factor = count / max_count if max_count > 0 else 0.0
             heatmap_color = utils.interpolate_color(factor, theme=theme)
-            color_map[db_key] = (heatmap_color, TEXT_PRIMARY)
+            
+            # Determine contrasting foreground color
+            new_fg = TEXT_PRIMARY if factor < 0.5 else BG_MAIN
+            color_map[db_key] = (heatmap_color, new_fg)
             
         self._apply_key_colors(color_map)
 
@@ -1424,8 +1425,8 @@ class TypeTraceUI(customtkinter.CTk):
             return KEYCAP_BASE
 
     def change_heatmap_theme(self, theme):
+        self._key_color_cache = {}  # Clear cache on theme change to force redraw (STEP 2)
         self._is_updating = True
-        self.wm_attributes("-alpha", 0)
         
         self.db.set_heatmap_theme(theme)
         if self.heatmap_var.get():
@@ -1433,7 +1434,6 @@ class TypeTraceUI(customtkinter.CTk):
             self.update_heatmap_colors()
             
         self.update_idletasks()
-        self.wm_attributes("-alpha", 1)
         self._is_updating = False
 
     # =====================================================================
@@ -1516,17 +1516,8 @@ class TypeTraceUI(customtkinter.CTk):
     def _apply_resize(self):
         self._resize_job = None
         self._is_updating = True
-        
-        is_mapped = self.winfo_ismapped()
-        if is_mapped:
-            self.wm_attributes("-alpha", 0)
-            
         self.draw_keyboard()
         self.update_idletasks()
-        
-        if is_mapped:
-            self.wm_attributes("-alpha", 1)
-            
         self._is_updating = False
 
     # =====================================================================
@@ -1607,7 +1598,11 @@ class TypeTraceUI(customtkinter.CTk):
             logging.exception(f"Error updating UI stats: {e}")
 
     def run_background_updates(self):
-        """Periodically runs background updates, rate-limiting UI updates (FIX 5 & BUG 3 FIXED)."""
+        """Periodically runs background updates, rate-limiting UI updates (FIX 5)."""
+        if not self._heatmap_loop_started:
+            self._heatmap_loop_started = True
+            self.after(2000, self._refresh_heatmap_colors)
+            
         try:
             self.db.save_data()
             
@@ -1620,8 +1615,6 @@ class TypeTraceUI(customtkinter.CTk):
                 return
                 
             self.update_ui_stats()
-            if self.heatmap_var.get():
-                self.update_heatmap_colors()
         except Exception as e:
             logging.exception(f"Error in background update loop: {e}")
         finally:
@@ -1629,6 +1622,21 @@ class TypeTraceUI(customtkinter.CTk):
                 self.after(1000, self.run_background_updates)
             except Exception:
                 pass
+
+    # Independent heatmap refresh loop scheduled at 2000ms (STEP 3)
+    def _refresh_heatmap_colors(self):
+        if not self.heatmap_var.get():
+            self.after(2000, self._refresh_heatmap_colors)
+            return
+        if getattr(self, '_heatmap_busy', False):
+            self.after(2000, self._refresh_heatmap_colors)
+            return
+        self._heatmap_busy = True
+        try:
+            self.update_heatmap_colors()
+        finally:
+            self._heatmap_busy = False
+            self.after(2000, self._refresh_heatmap_colors)
 
     # =====================================================================
     # Profile Management
@@ -1746,6 +1754,7 @@ class TypeTraceUI(customtkinter.CTk):
             "This action cannot be undone."
         )
         if confirm:
+            self._key_color_cache = {}  # Clear cache on reset (STEP 2)
             self.db.reset_profile_statistics(self.tracker.active_profile)
             self.update_heatmap_colors()
             self.update_ui_stats()
