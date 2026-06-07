@@ -24,6 +24,8 @@
 
 ## 🚀 Quick Start (For General Users)
 
+👉 [**Download TypeTrace.exe**](https://github.com/nickguti/TypeTrace/releases/latest)
+
 Getting started with TypeTrace is simple and requires no setup:
 
 1. Go to the **Releases** section on the right side of this repository.
