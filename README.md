@@ -3,6 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
+[![Downloads](https://img.shields.io/github/downloads/nickguti/TypeTrace/total?color=brightgreen)](https://github.com/nickguti/TypeTrace/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/nickguti/TypeTrace)](https://github.com/nickguti/TypeTrace/releases/latest)
 
 **TypeTrace** is a modern, thread-safe, and dark-themed desktop application written in Python to track, analyze, and visualize your typing habits and gaming performance globally in real-time.
 ![TypeTrace Screenshot](assets/screenshot.png)
