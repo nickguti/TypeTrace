@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter
@@ -40,9 +41,46 @@ GRID_LINE = "#1F2330"
 FONT_FAMILY = "Inter"
 
 # =====================================================================
+# Rounded Rectangle Canvas Helper (High Performance Polygon)
+# =====================================================================
+def draw_rounded_rect(canvas, x0, y0, x1, y1, r=6, **kwargs):
+    if r <= 0:
+        return canvas.create_rectangle(x0, y0, x1, y1, **kwargs)
+        
+    points = []
+    # Top-right corner
+    cx, cy = x1 - r, y0 + r
+    for i in range(10):
+        angle = math.radians(270 + i * 10)
+        points.append(cx + r * math.cos(angle))
+        points.append(cy + r * math.sin(angle))
+        
+    # Bottom-right corner
+    cx, cy = x1 - r, y1 - r
+    for i in range(10):
+        angle = math.radians(0 + i * 10)
+        points.append(cx + r * math.cos(angle))
+        points.append(cy + r * math.sin(angle))
+        
+    # Bottom-left corner
+    cx, cy = x0 + r, y1 - r
+    for i in range(10):
+        angle = math.radians(90 + i * 10)
+        points.append(cx + r * math.cos(angle))
+        points.append(cy + r * math.sin(angle))
+        
+    # Top-left corner
+    cx, cy = x0 + r, y0 + r
+    for i in range(10):
+        angle = math.radians(180 + i * 10)
+        points.append(cx + r * math.cos(angle))
+        points.append(cy + r * math.sin(angle))
+        
+    return canvas.create_polygon(points, **kwargs)
+
+# =====================================================================
 # 100% ANSI Keyboard Layout Definition
 # =====================================================================
-
 LEFT_KEYBOARD_LAYOUT = [
     # Row 0 (Function keys)
     [
@@ -99,7 +137,7 @@ NAV_KEYBOARD_LAYOUT = [
 
 # Numpad coordinates format: (Label, Row, Col, RowSpan, ColSpan, Database_Key_ID)
 NUMPAD_KEYBOARD_LAYOUT = [
-    ("spacer", 0, 0, 1, 4, "spacer"), # Align top row spacer (where F-keys align)
+    ("spacer", 0, 0, 1, 4, "spacer"),
     ("Num", 1, 0, 1, 1, "Num_lock"), ("/", 1, 1, 1, 1, "Kp_/"), ("*", 1, 2, 1, 1, "Kp_*"), ("-", 1, 3, 1, 1, "Kp_-"),
     ("7", 2, 0, 1, 1, "Kp_7"), ("8", 2, 1, 1, 1, "Kp_8"), ("9", 2, 2, 1, 1, "Kp_9"), ("+", 2, 3, 2, 1, "Kp_+"),
     ("4", 3, 0, 1, 1, "Kp_4"), ("5", 3, 1, 1, 1, "Kp_5"), ("6", 3, 2, 1, 1, "Kp_6"),
@@ -110,15 +148,12 @@ NUMPAD_KEYBOARD_LAYOUT = [
 # =====================================================================
 # Toast Notification System
 # =====================================================================
-
 class ToastNotification:
     """Temporary overlay notification that appears at the bottom-right of the window."""
-    
     def __init__(self, parent, message, toast_type="success", duration=3000):
         self.parent = parent
         self.duration = duration
         
-        # Color based on type
         if toast_type == "success":
             bg_color = "#111318"
             border_color = ACCENT
@@ -135,7 +170,6 @@ class ToastNotification:
             text_color = TEXT_SECONDARY
             icon = "ℹ"
         
-        # Create toast frame
         self.frame = customtkinter.CTkFrame(
             parent,
             fg_color=bg_color,
@@ -144,7 +178,6 @@ class ToastNotification:
             corner_radius=10
         )
         
-        # Toast content
         self.label = customtkinter.CTkLabel(
             self.frame,
             text=f" {icon}  {message}",
@@ -154,11 +187,9 @@ class ToastNotification:
         )
         self.label.pack(padx=16, pady=10)
         
-        # Position at bottom-right
         self.frame.place(relx=1.0, rely=1.0, anchor="se", x=-30, y=-70)
         self.frame.lift()
         
-        # Auto-dismiss
         self._fade_step = 0
         parent.after(self.duration, self._start_fade)
     
@@ -170,88 +201,98 @@ class ToastNotification:
             except Exception:
                 pass
             return
-        # Progressively reduce visibility by moving down
         try:
             self.frame.place(relx=1.0, rely=1.0, anchor="se", x=-30, y=-70 + (self._fade_step * 15))
             self.parent.after(50, self._start_fade)
         except Exception:
             pass
 
-
 # =====================================================================
-# Tooltip
+# Canvas-Based Tooltip INSIDE root window (BUG 1 FIXED)
 # =====================================================================
-
 class Tooltip:
-    def __init__(self, widget, get_text_func):
+    def __init__(self, widget, get_text_func, root_canvas_parent):
         self.widget = widget
         self.get_text_func = get_text_func
-        self.tip_window = None
-        self.id = None
-        
-        self.widget.bind("<Enter>", self.enter)
-        self.widget.bind("<Leave>", self.leave)
-        
-    def enter(self, event=None):
-        self.schedule()
-        
-    def leave(self, event=None):
-        self.unschedule()
-        self.hide_tip()
-        
-    def schedule(self):
-        self.unschedule()
-        self.id = self.widget.after(250, self.show_tip)
-        
-    def unschedule(self):
-        if self.id:
-            self.widget.after_cancel(self.id)
-            self.id = None
-            
-    def show_tip(self, event=None):
-        x = self.widget.winfo_pointerx() + 15
-        y = self.widget.winfo_pointery() + 15
-        
-        self.tip_window = tw = customtkinter.CTkToplevel(self.widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
-        tw.attributes("-alpha", 0.95)
-        tw.attributes("-topmost", True)
-        tw.transient(self.widget.winfo_toplevel())
-        
-        frame = customtkinter.CTkFrame(
-            tw,
-            fg_color=BG_CARD_INNER,
-            border_color=ACCENT,
-            border_width=1.5,
+        self.root = root_canvas_parent  # the TypeTraceUI root window
+        self._tip_frame = None
+        self._schedule_id = None
+        widget.bind("<Enter>", self._on_enter)
+        widget.bind("<Leave>", self._on_leave)
+        widget.bind("<Motion>", self._on_motion)
+
+    def _on_enter(self, event):
+        self._schedule_id = self.widget.after(300, self._show)
+
+    def _on_leave(self, event):
+        if self._schedule_id:
+            self.widget.after_cancel(self._schedule_id)
+            self._schedule_id = None
+        self._hide()
+
+    def _on_motion(self, event):
+        # Reposition tooltip if already visible
+        if self._tip_frame and self._tip_frame.winfo_exists():
+            self._reposition()
+
+    def _show(self):
+        self._hide()  # destroy any previous instance
+        text = self.get_text_func()
+        if not text:
+            return
+
+        # Place tooltip as a CTkFrame INSIDE the root window using place()
+        self._tip_frame = customtkinter.CTkFrame(
+            self.root,
+            fg_color="#111318",
+            border_color="#00F5D4",
+            border_width=1,
             corner_radius=8
         )
-        frame.pack(padx=1, pady=1, fill="both", expand=True)
-        
-        text = self.get_text_func()
-        label = customtkinter.CTkLabel(
-            frame,
+        lbl = customtkinter.CTkLabel(
+            self._tip_frame,
             text=text,
             justify="left",
-            font=(FONT_FAMILY, 10),
-            text_color=TEXT_PRIMARY,
+            font=("Inter", 10),
+            text_color="#FFFFFF",
             padx=12,
             pady=10
         )
-        label.pack()
-        
-    def hide_tip(self):
-        if self.tip_window:
+        lbl.pack()
+
+        # Calculate position relative to root window
+        self._reposition()
+        self._tip_frame.lift()  # bring above other widgets
+
+    def _reposition(self):
+        if not self._tip_frame:
+            return
+        # Get pointer position relative to root window
+        rx = self.root.winfo_pointerx() - self.root.winfo_rootx() + 15
+        ry = self.root.winfo_pointery() - self.root.winfo_rooty() + 15
+        # Clamp so it doesn't go off-screen within the window
+        win_w = self.root.winfo_width()
+        win_h = self.root.winfo_height()
+        self._tip_frame.update_idletasks()
+        tw = self._tip_frame.winfo_reqwidth()
+        th = self._tip_frame.winfo_reqheight()
+        if rx + tw > win_w - 10:
+            rx = rx - tw - 30
+        if ry + th > win_h - 10:
+            ry = ry - th - 30
+        self._tip_frame.place(x=rx, y=ry)
+
+    def _hide(self):
+        if self._tip_frame:
             try:
-                self.tip_window.destroy()
+                self._tip_frame.destroy()
             except Exception:
                 pass
-            self.tip_window = None
+            self._tip_frame = None
 
 # =====================================================================
 # Productivity Chart (24h bar chart)
 # =====================================================================
-
 class ProductivityChart(customtkinter.CTkCanvas):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, bg=BG_CARD, highlightthickness=0, **kwargs)
@@ -269,7 +310,6 @@ class ProductivityChart(customtkinter.CTkCanvas):
         if width <= 1: width = 500
         if height <= 1: height = 150
         
-        # 24 hours distribution bucket
         hours_values = [0] * 24
         for hour_str, hour_stats in hourly_data.items():
             try:
@@ -293,16 +333,13 @@ class ProductivityChart(customtkinter.CTkCanvas):
         if start_x < padding_x:
             start_x = padding_x
             
-        # Draw background grid lines
         grid_lines_count = 3
         for i in range(1, grid_lines_count + 1):
             y = height - padding_y - (chart_h * i / (grid_lines_count + 1))
             self.create_line(padding_x, y, width - padding_x, y, fill=GRID_LINE, width=1)
             
-        # Draw X Axis line
         self.create_line(padding_x, height - padding_y, width - padding_x, height - padding_y, fill=GRID_LINE, width=1)
         
-        # Draw bars with gradient
         for hour in range(24):
             val = hours_values[hour]
             if val == 0:
@@ -325,22 +362,17 @@ class ProductivityChart(customtkinter.CTkCanvas):
                 color = f"#{r:02x}{g:02x}{b:02x}"
                 self.create_rectangle(x0, sy0, x1, sy1, fill=color, outline="")
                 
-            # Rounded top cap
             self.create_oval(x0, y0 - 3, x1, y0 + 3, fill=ACCENT, outline="")
             
-        # Draw labels
         for h in [0, 6, 12, 18, 23]:
             x = start_x + h * 18 + 3
             self.create_text(x, height - padding_y + 12, text=f"{h}h", fill=TEXT_SECONDARY, font=(FONT_FAMILY, 9))
 
-
 # =====================================================================
 # Heatmap Legend (Gradient bar)
 # =====================================================================
-
 class HeatmapLegend(customtkinter.CTkCanvas):
     """Thin horizontal gradient bar showing heatmap color scale."""
-    
     def __init__(self, parent, **kwargs):
         super().__init__(parent, bg=BG_CARD, highlightthickness=0, height=24, **kwargs)
         self.current_theme = "Classic"
@@ -366,7 +398,6 @@ class HeatmapLegend(customtkinter.CTkCanvas):
         if bar_w <= 0:
             return
             
-        # Draw gradient slices
         num_slices = min(bar_w, 100)
         for i in range(num_slices):
             t = i / max(1, num_slices - 1)
@@ -375,15 +406,12 @@ class HeatmapLegend(customtkinter.CTkCanvas):
             x1 = bar_x0 + (bar_w * (i + 1) / num_slices)
             self.create_rectangle(x0, bar_y0, x1, bar_y1, fill=color, outline="")
         
-        # Labels
         self.create_text(bar_x0 - 5, (bar_y0 + bar_y1) // 2, text="0%", fill=TEXT_SECONDARY, font=(FONT_FAMILY, 8), anchor="e")
         self.create_text(bar_x1 + 5, (bar_y0 + bar_y1) // 2, text="100%", fill=TEXT_SECONDARY, font=(FONT_FAMILY, 8), anchor="w")
-
 
 # =====================================================================
 # Process Mapping Dialog
 # =====================================================================
-
 class ProcessMappingDialog(customtkinter.CTkToplevel):
     def __init__(self, parent, db):
         super().__init__(parent)
@@ -413,7 +441,6 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
         )
         desc_lbl.pack(pady=(0, 15))
         
-        # Configuration entry row
         add_frame = customtkinter.CTkFrame(frame, fg_color=KEYCAP_BASE, border_color=BORDER_COLOR, border_width=1, corner_radius=12)
         add_frame.pack(fill="x", padx=15, pady=5)
         
@@ -443,7 +470,6 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
         )
         add_btn.grid(row=0, column=4, padx=8, pady=10)
         
-        # Scrollable mapping list
         self.list_frame = customtkinter.CTkScrollableFrame(
             frame, height=200, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=12
         )
@@ -496,11 +522,9 @@ class ProcessMappingDialog(customtkinter.CTkToplevel):
             self.db.set_profile_mappings(mappings)
             self.load_mappings()
 
-
 # =====================================================================
 # About Dialog
 # =====================================================================
-
 class AboutDialog(customtkinter.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
@@ -515,15 +539,12 @@ class AboutDialog(customtkinter.CTkToplevel):
         frame = customtkinter.CTkFrame(self, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=16)
         frame.pack(fill="both", expand=True, padx=15, pady=15)
         
-        # Logo
         logo = customtkinter.CTkLabel(frame, text="TYPETRACE", font=(FONT_FAMILY, 28, "bold"), text_color=ACCENT)
         logo.pack(pady=(25, 2))
         
-        # Version
         version_lbl = customtkinter.CTkLabel(frame, text=f"v{APP_VERSION}", font=(FONT_FAMILY, 12), text_color=TEXT_SECONDARY)
         version_lbl.pack(pady=(0, 12))
         
-        # Description
         desc = customtkinter.CTkLabel(
             frame, 
             text="Privacy-focused keystroke analytics.\nAll data stored locally on your machine.",
@@ -531,11 +552,9 @@ class AboutDialog(customtkinter.CTkToplevel):
         )
         desc.pack(pady=(0, 16))
         
-        # Separator
         sep = customtkinter.CTkFrame(frame, fg_color=BORDER_COLOR, height=1)
         sep.pack(fill="x", padx=30, pady=(0, 16))
         
-        # GitHub link
         github_lbl = customtkinter.CTkLabel(
             frame,
             text=f"★ GitHub Repository",
@@ -546,15 +565,12 @@ class AboutDialog(customtkinter.CTkToplevel):
         github_lbl.pack(pady=(0, 5))
         github_lbl.bind("<Button-1>", lambda e: webbrowser.open(APP_GITHUB))
         
-        # Made with love
         footer = customtkinter.CTkLabel(frame, text="Made with ⌨️ by TypeTrace", font=(FONT_FAMILY, 9), text_color="#555555")
         footer.pack(pady=(5, 10))
-
 
 # =====================================================================
 # Main Application UI
 # =====================================================================
-
 class TypeTraceUI(customtkinter.CTk):
     def __init__(self, db, tracker, shutdown_callback=None):
         super().__init__()
@@ -569,45 +585,36 @@ class TypeTraceUI(customtkinter.CTk):
         self.minsize(1100, 680)
         self.configure(fg_color=BG_MAIN)
         
-        # Set programmatic icon
         self._set_window_icon()
         
-        # Window setup & close interception
         self.protocol('WM_DELETE_WINDOW', self.withdraw_to_tray)
         
-        # State references
         self.overlay = None
         self.current_layout = "ANSI 100%"
         self._status_pulse_step = 0
+        self._resize_job = None
+        self._is_updating = False
         
-        # Tkinter state variables
         self.incognito_var = tk.BooleanVar(value=self.tracker.incognito_mode)
         self.heatmap_var = tk.BooleanVar(value=False)
         self.startup_var = tk.BooleanVar(value=utils.is_startup_enabled())
         self.overlay_var = tk.BooleanVar(value=self.db.get_overlay_enabled())
         
-        # Visual assets map
         self.key_buttons = {}
         self.tooltips = {}
         
-        # Build UI layout
         self.setup_layout()
-        
-        # Initial statistics update
         self.update_ui_stats()
         
-        # Load floating overlay on launch if enabled in config
         if self.overlay_var.get():
             self.after(500, self.toggle_overlay)
             
-        # Run background loop to update APM/WPM/Stats periodically
         self.run_background_updates()
-        
-        # Start status dot pulse animation
         self._pulse_status_dot()
+        
+        self.bind("<Configure>", self.on_resize)
 
     def _set_window_icon(self):
-        """Set window icon programmatically using Pillow."""
         try:
             from PIL import Image, ImageDraw, ImageTk
             size = 64
@@ -621,23 +628,19 @@ class TypeTraceUI(customtkinter.CTk):
             draw.line([14, 32, 50, 32], fill=(255, 255, 255, 180), width=1)
             photo = ImageTk.PhotoImage(img)
             self.iconphoto(True, photo)
-            self._icon_ref = photo  # Keep reference to prevent GC
+            self._icon_ref = photo
         except Exception:
             pass
 
     def setup_layout(self):
-        # Master frame for all content (allows padding)
         self.master_frame = customtkinter.CTkFrame(self, fg_color="transparent")
         self.master_frame.pack(fill="both", expand=True, padx=25, pady=25)
         
-        # =====================================================================
         # 1. TOP HEADER BAR
-        # =====================================================================
         self.header_frame = customtkinter.CTkFrame(self.master_frame, fg_color="transparent", height=55)
         self.header_frame.pack(fill="x", pady=(0, 12))
         self.header_frame.pack_propagate(False)
 
-        # Left Side: Logo & Sub-logo
         self.logo_container = customtkinter.CTkFrame(self.header_frame, fg_color="transparent")
         self.logo_container.pack(side="left")
 
@@ -657,7 +660,6 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.sub_logo_label.pack(anchor="w")
 
-        # Center: Live APM / WPM
         self.header_metrics = customtkinter.CTkFrame(self.header_frame, fg_color="transparent")
         self.header_metrics.pack(side="left", expand=True)
 
@@ -671,11 +673,9 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.header_wpm_label.pack(side="left")
 
-        # Right Side: Status dot + About button
         self.header_right = customtkinter.CTkFrame(self.header_frame, fg_color="transparent")
         self.header_right.pack(side="right")
 
-        # Status indicator
         self.status_indicator_frame = customtkinter.CTkFrame(self.header_right, fg_color="transparent")
         self.status_indicator_frame.pack(side="left", padx=(0, 12))
         
@@ -688,7 +688,6 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.status_text.pack(side="left")
 
-        # About button
         self.about_btn = customtkinter.CTkButton(
             self.header_right, text="?", width=32, height=32,
             fg_color=KEYCAP_BASE, hover_color=KEYCAP_HOVER, text_color=TEXT_SECONDARY,
@@ -697,13 +696,10 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.about_btn.pack(side="left", padx=(8, 0))
 
-        # =====================================================================
         # 2. KEYBOARD SECTION (Top Card)
-        # =====================================================================
         self.top_card = customtkinter.CTkFrame(self.master_frame, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=16)
         self.top_card.pack(fill="both", expand=True, pady=(0, 12))
 
-        # Keyboard header row
         self.kb_header = customtkinter.CTkFrame(self.top_card, fg_color="transparent")
         self.kb_header.pack(fill="x", padx=20, pady=(12, 3))
         
@@ -712,7 +708,6 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.main_title.pack(side="left")
         
-        # Layout switcher dropdown
         self.layout_combo = customtkinter.CTkComboBox(
             self.kb_header, values=["ANSI 100%", "TKL", "75%", "65%", "60%"],
             command=self.switch_keyboard_layout, width=120, height=26,
@@ -735,39 +730,18 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.main_subtitle.pack(anchor="w", padx=20, pady=(0, 8))
         
-        # Keyboard container
+        # Single Keyboard Canvas packed directly in the container (FIX 4)
         self.keyboard_container = customtkinter.CTkFrame(self.top_card, fg_color="transparent")
         self.keyboard_container.pack(fill="both", expand=True, padx=20, pady=(0, 8))
         
-        self.keyboard_container.grid_columnconfigure(0, weight=15, uniform="block_cols")
-        self.keyboard_container.grid_columnconfigure(1, weight=3, uniform="block_cols")
-        self.keyboard_container.grid_columnconfigure(2, weight=4, uniform="block_cols")
-        self.keyboard_container.grid_rowconfigure(0, weight=1)
-        
-        self.left_keyboard_frame = customtkinter.CTkFrame(
-            self.keyboard_container, fg_color=BG_MAIN, border_color=BORDER_COLOR, border_width=1, corner_radius=12
-        )
-        self.left_keyboard_frame.grid(row=0, column=0, padx=(0, 25), pady=0, sticky="nsew")
-        
-        self.nav_keyboard_frame = customtkinter.CTkFrame(
-            self.keyboard_container, fg_color=BG_MAIN, border_color=BORDER_COLOR, border_width=1, corner_radius=12
-        )
-        self.nav_keyboard_frame.grid(row=0, column=1, padx=(0, 25), pady=0, sticky="nsew")
-        
-        self.numpad_keyboard_frame = customtkinter.CTkFrame(
-            self.keyboard_container, fg_color=BG_MAIN, border_color=BORDER_COLOR, border_width=1, corner_radius=12
-        )
-        self.numpad_keyboard_frame.grid(row=0, column=2, padx=0, pady=0, sticky="nsew")
+        self.kbd_canvas = tk.Canvas(self.keyboard_container, bg=BG_MAIN, highlightthickness=0)
+        self.kbd_canvas.pack(fill="both", expand=True)
         
         self.generate_keyboard()
         
-        # Heatmap Legend (hidden by default, shown when heatmap is active)
         self.heatmap_legend = HeatmapLegend(self.top_card)
-        # Not packed yet — will show/hide via toggle_heatmap
 
-        # =====================================================================
         # 3. BOTTOM SECTION: Three-Column Grid
-        # =====================================================================
         self.bottom_grid = customtkinter.CTkFrame(self.master_frame, fg_color="transparent")
         self.bottom_grid.pack(fill="x", pady=(0, 12))
 
@@ -775,9 +749,7 @@ class TypeTraceUI(customtkinter.CTk):
         self.bottom_grid.grid_columnconfigure(1, weight=1, uniform="bottom_cols")
         self.bottom_grid.grid_columnconfigure(2, weight=1, uniform="bottom_cols")
 
-        # =====================================================================
         # CARD 0: CONFIGURATION & THEMES
-        # =====================================================================
         self.config_card = customtkinter.CTkFrame(self.bottom_grid, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=16)
         self.config_card.grid(row=0, column=0, padx=(0, 12), sticky="nsew")
 
@@ -891,16 +863,13 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.reset_btn.grid(row=0, column=3, padx=2, sticky="ew")
 
-        # =====================================================================
         # CARD 1: TELEMETRY — 3 Mini-Cards
-        # =====================================================================
         self.telemetry_card = customtkinter.CTkFrame(self.bottom_grid, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=16)
         self.telemetry_card.grid(row=0, column=1, padx=(0, 12), sticky="nsew")
 
         self.telemetry_title = customtkinter.CTkLabel(self.telemetry_card, text="📊 TELEMETRY & METRICS", font=(FONT_FAMILY, 12, "bold"), text_color=TEXT_PRIMARY)
         self.telemetry_title.pack(anchor="w", padx=15, pady=(12, 8))
 
-        # Mini-cards container
         self.mini_cards = customtkinter.CTkFrame(self.telemetry_card, fg_color="transparent")
         self.mini_cards.pack(fill="both", expand=True, padx=10, pady=(0, 12))
         
@@ -909,7 +878,7 @@ class TypeTraceUI(customtkinter.CTk):
         self.mini_cards.columnconfigure(2, weight=1, uniform="mini")
         self.mini_cards.rowconfigure(0, weight=1)
 
-        # --- Mini-Card A: Session Stats ---
+        # Mini-Card A: Session Stats
         self.mc_session = customtkinter.CTkFrame(self.mini_cards, fg_color=BG_CARD_INNER, border_color=BORDER_INNER, border_width=1, corner_radius=12)
         self.mc_session.grid(row=0, column=0, padx=4, sticky="nsew")
         
@@ -925,7 +894,7 @@ class TypeTraceUI(customtkinter.CTk):
         self.error_ratio_lbl = customtkinter.CTkLabel(self.mc_session, text="⌫ Ratio: 0.0%", font=(FONT_FAMILY, 10), text_color=TEXT_SECONDARY, anchor="w")
         self.error_ratio_lbl.pack(anchor="w", padx=10, pady=(0, 8))
 
-        # --- Mini-Card B: Leaderboard ---
+        # Mini-Card B: Leaderboard
         self.mc_leaderboard = customtkinter.CTkFrame(self.mini_cards, fg_color=BG_CARD_INNER, border_color=BORDER_INNER, border_width=1, corner_radius=12)
         self.mc_leaderboard.grid(row=0, column=1, padx=4, sticky="nsew")
         
@@ -947,7 +916,7 @@ class TypeTraceUI(customtkinter.CTk):
             lbl.pack(anchor="w", padx=10, pady=0)
             self.top_combos_labels.append(lbl)
 
-        # --- Mini-Card C: Bursts ---
+        # Mini-Card C: Bursts
         self.mc_bursts = customtkinter.CTkFrame(self.mini_cards, fg_color=BG_CARD_INNER, border_color=BORDER_INNER, border_width=1, corner_radius=12)
         self.mc_bursts.grid(row=0, column=2, padx=4, sticky="nsew")
         
@@ -966,9 +935,7 @@ class TypeTraceUI(customtkinter.CTk):
             lbl.pack(anchor="w", padx=10, pady=0)
             self.burst_labels.append(lbl)
 
-        # =====================================================================
         # CARD 2: PRODUCTIVITY PROFILE
-        # =====================================================================
         self.chart_card = customtkinter.CTkFrame(self.bottom_grid, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=16)
         self.chart_card.grid(row=0, column=2, sticky="nsew")
 
@@ -978,9 +945,7 @@ class TypeTraceUI(customtkinter.CTk):
         self.chart_canvas = ProductivityChart(self.chart_card)
         self.chart_canvas.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
-        # =====================================================================
         # STATUS BAR (Bottom)
-        # =====================================================================
         self.status_bar = customtkinter.CTkFrame(self.master_frame, height=30, fg_color=BG_CARD, border_color=BORDER_COLOR, border_width=1, corner_radius=12)
         self.status_bar.pack(fill="x", pady=(0, 0))
 
@@ -989,7 +954,6 @@ class TypeTraceUI(customtkinter.CTk):
         )
         self.status_left_lbl.pack(side="left", padx=15, pady=4)
 
-        # LED Frame
         self.led_frame = customtkinter.CTkFrame(self.status_bar, fg_color="transparent")
         self.led_frame.pack(side="right", padx=15, pady=4)
 
@@ -1006,13 +970,10 @@ class TypeTraceUI(customtkinter.CTk):
     # Status Dot Pulse Animation
     # =====================================================================
     def _pulse_status_dot(self):
-        """Pulses the header status dot between bright and dim to indicate active tracking."""
         try:
             if self.incognito_var.get():
-                # Red pulsing in incognito
                 colors = ["#A63A50", "#D44D63", "#A63A50", "#8A3040"]
             else:
-                # Green pulsing in normal mode
                 colors = [ACCENT, "#00C4A8", "#009E89", "#00C4A8"]
             
             idx = self._status_pulse_step % len(colors)
@@ -1027,164 +988,278 @@ class TypeTraceUI(customtkinter.CTk):
                 pass
 
     # =====================================================================
-    # Keyboard Generation
+    # Canvas Keyboard Generation & Scaling Helpers (FIX 4)
     # =====================================================================
     def generate_keyboard(self):
-        # 1. LEFT BLOCK
-        for col in range(60):
-            self.left_keyboard_frame.grid_columnconfigure(col, weight=1, uniform="left_col")
-        for row in range(6):
-            self.left_keyboard_frame.grid_rowconfigure(row, weight=1, uniform="left_row")
-            
+        self.keys_data = []
+        
+        # 1. Parse Left block
         for row_idx, row_keys in enumerate(LEFT_KEYBOARD_LAYOUT):
             current_col = 0
             for label, span, db_key in row_keys:
                 if db_key == "spacer":
                     current_col += span
                     continue
-                    
-                btn = customtkinter.CTkButton(
-                    self.left_keyboard_frame,
-                    text=label,
-                    fg_color=KEYCAP_BASE,
-                    text_color=TEXT_SECONDARY,
-                    hover_color=KEYCAP_HOVER,
-                    font=(FONT_FAMILY, 10),
-                    corner_radius=6,
-                    border_width=0,
-                    cursor="hand2"
-                )
-                btn.grid(row=row_idx, column=current_col, columnspan=span, padx=2, pady=2, sticky="nsew")
-                
-                self.key_buttons[db_key] = btn
-                self.tooltips[db_key] = Tooltip(btn, lambda k=db_key: self.get_key_tooltip_text(k))
+                self.keys_data.append({
+                    "db_key": db_key,
+                    "label": label,
+                    "block": "left",
+                    "row": row_idx,
+                    "col": current_col,
+                    "colspan": span,
+                    "rowspan": 1
+                })
                 current_col += span
-
-        # 2. NAV BLOCK
-        for col in range(3):
-            self.nav_keyboard_frame.grid_columnconfigure(col, weight=1, uniform="nav_col")
-        for row in range(6):
-            self.nav_keyboard_frame.grid_rowconfigure(row, weight=1, uniform="nav_row")
-            
+                
+        # 2. Parse Nav block
         for row_idx, row_keys in enumerate(NAV_KEYBOARD_LAYOUT):
             for col_idx, (label, span, db_key) in enumerate(row_keys):
                 if db_key == "spacer" or label == "empty":
                     continue
-                    
-                btn = customtkinter.CTkButton(
-                    self.nav_keyboard_frame,
-                    text=label,
-                    fg_color=KEYCAP_BASE,
-                    text_color=TEXT_SECONDARY,
-                    hover_color=KEYCAP_HOVER,
-                    font=(FONT_FAMILY, 10),
-                    corner_radius=6,
-                    border_width=0,
-                    cursor="hand2"
-                )
-                btn.grid(row=row_idx, column=col_idx, columnspan=span, padx=2, pady=2, sticky="nsew")
+                self.keys_data.append({
+                    "db_key": db_key,
+                    "label": label,
+                    "block": "nav",
+                    "row": row_idx,
+                    "col": col_idx * 4,
+                    "colspan": span * 4,
+                    "rowspan": 1
+                })
                 
-                self.key_buttons[db_key] = btn
-                self.tooltips[db_key] = Tooltip(btn, lambda k=db_key: self.get_key_tooltip_text(k))
-
-        # 3. NUMPAD BLOCK
-        for col in range(4):
-            self.numpad_keyboard_frame.grid_columnconfigure(col, weight=1, uniform="num_col")
-        for row in range(6):
-            self.numpad_keyboard_frame.grid_rowconfigure(row, weight=1, uniform="num_row")
-            
+        # 3. Parse Numpad block
         for label, row, col, rowspan, colspan, db_key in NUMPAD_KEYBOARD_LAYOUT:
             if db_key == "spacer":
                 continue
-                
-            btn = customtkinter.CTkButton(
-                self.numpad_keyboard_frame,
-                text=label,
-                fg_color=KEYCAP_BASE,
-                text_color=TEXT_SECONDARY,
-                hover_color=KEYCAP_HOVER,
-                font=(FONT_FAMILY, 10),
-                corner_radius=6,
-                border_width=0,
-                cursor="hand2"
-            )
-            btn.grid(row=row, column=col, rowspan=rowspan, columnspan=colspan, padx=2, pady=2, sticky="nsew")
+            self.keys_data.append({
+                "db_key": db_key,
+                "label": label,
+                "block": "numpad",
+                "row": row,
+                "col": col * 4,
+                "colspan": colspan * 4,
+                "rowspan": rowspan
+            })
             
-            self.key_buttons[db_key] = btn
-            self.tooltips[db_key] = Tooltip(btn, lambda k=db_key: self.get_key_tooltip_text(k))
-
-    # =====================================================================
-    # Keyboard Layout Switcher
-    # =====================================================================
-    def switch_keyboard_layout(self, layout_name):
-        """Show/hide keyboard blocks based on selected layout."""
-        self.current_layout = layout_name
+        # Compatibility map
+        self.key_buttons = {}
+        self.tooltips = {}
+        for key in self.keys_data:
+            self.key_buttons[key["db_key"]] = True
+            
+        # Bind Canvas Tag Events
+        self.kbd_canvas.tag_bind("key", "<Enter>", self.on_key_enter)
+        self.kbd_canvas.tag_bind("key", "<Leave>", self.on_key_leave)
+        self.kbd_canvas.tag_bind("key", "<Button-1>", self.on_key_click)
         
-        # Function row is row 0 of left keyboard
-        func_row_keys = [k for _, _, k in LEFT_KEYBOARD_LAYOUT[0] if k != "spacer"]
+        # Centralized Tooltip State
+        self.active_tooltip_key = None
+        self.tooltip_window = None
+        self.tooltip_after_id = None
+        
+        self.draw_keyboard()
+
+    def is_key_visible(self, key_data, layout_name):
+        block = key_data["block"]
+        row = key_data["row"]
+        db_key = key_data["db_key"]
         
         if layout_name == "ANSI 100%":
-            # Show everything
-            self.nav_keyboard_frame.grid()
-            self.numpad_keyboard_frame.grid()
-            for k in func_row_keys:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid()
-            # Show arrow keys
-            for k in ["Up", "Down", "Left", "Right"]:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid()
-                    
-        elif layout_name == "TKL":
-            # Hide numpad, show nav
-            self.nav_keyboard_frame.grid()
-            self.numpad_keyboard_frame.grid_remove()
-            for k in func_row_keys:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid()
-            for k in ["Up", "Down", "Left", "Right"]:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid()
-                    
-        elif layout_name == "75%":
-            # Hide numpad, show nav compact
-            self.numpad_keyboard_frame.grid_remove()
-            self.nav_keyboard_frame.grid()
-            for k in func_row_keys:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid()
-            for k in ["Up", "Down", "Left", "Right"]:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid()
-                    
+            return True
+            
+        elif layout_name == "TKL" or layout_name == "75%":
+            return block != "numpad"
+            
         elif layout_name == "65%":
-            # Hide numpad + nav + function row
-            self.numpad_keyboard_frame.grid_remove()
-            self.nav_keyboard_frame.grid_remove()
-            for k in func_row_keys:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid_remove()
-            # Keep arrows
-            for k in ["Up", "Down", "Left", "Right"]:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid()
-                    
+            if block == "numpad":
+                return False
+            if block == "left" and row == 0:
+                return False
+            if block == "nav":
+                return db_key in ["Up", "Down", "Left", "Right"]
+            return True
+            
         elif layout_name == "60%":
-            # Hide numpad + nav + function row + arrows
-            self.numpad_keyboard_frame.grid_remove()
-            self.nav_keyboard_frame.grid_remove()
-            for k in func_row_keys:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid_remove()
-            for k in ["Up", "Down", "Left", "Right"]:
-                if k in self.key_buttons:
-                    self.key_buttons[k].grid_remove()
+            if block != "left":
+                return False
+            return row > 0
+            
+        return True
+
+    def get_key_coords(self, key, width, height):
+        margin = 6
+        
+        show_nav = self.current_layout in ["ANSI 100%", "TKL", "75%", "65%"]
+        show_numpad = self.current_layout == "ANSI 100%"
+        
+        if show_numpad:
+            total_cols = 96
+        elif show_nav:
+            total_cols = 76
+        else:
+            total_cols = 60
+            
+        row_start = 1 if self.current_layout in ["65%", "60%"] else 0
+        total_rows = 6 - row_start
+        
+        col_w = (width - margin * 2) / total_cols
+        row_h = (height - margin * 2) / total_rows
+        
+        start_col = 0
+        if key["block"] == "nav":
+            start_col = 64
+        elif key["block"] == "numpad":
+            start_col = 80
+            
+        x0 = margin + (start_col + key["col"]) * col_w
+        x1 = x0 + key["colspan"] * col_w
+        y0 = margin + (key["row"] - row_start) * row_h
+        y1 = y0 + key["rowspan"] * row_h
+        
+        return x0, y0, x1, y1
+
+    def draw_keyboard(self, width=None, height=None):
+        if width is None:
+            width = self.kbd_canvas.winfo_width()
+        if height is None:
+            height = self.kbd_canvas.winfo_height()
+            
+        if width <= 1: width = 1100
+        if height <= 1: height = 280
+        
+        self.kbd_canvas.delete("all")
+        
+        resting_text_color = TEXT_PRIMARY if self.heatmap_var.get() else TEXT_SECONDARY
+        
+        for key in self.keys_data:
+            if not self.is_key_visible(key, self.current_layout):
+                continue
+                
+            x0, y0, x1, y1 = self.get_key_coords(key, width, height)
+            color = self.get_key_target_color(key["db_key"])
+            
+            # Draw key base shape
+            draw_rounded_rect(
+                self.kbd_canvas, x0 + 2, y0 + 2, x1 - 2, y1 - 2, r=6,
+                fill=color, outline="#2F313D", width=1,
+                tags=("key", f"rect_{key['db_key']}", key["db_key"])
+            )
+            
+            # Draw key label text (state='disabled' makes it click-through)
+            cx = (x0 + x1) / 2
+            cy = (y0 + y1) / 2
+            self.kbd_canvas.create_text(
+                cx, cy, text=key["label"], fill=resting_text_color,
+                font=(FONT_FAMILY, 10), state="disabled",
+                tags=("keylabel", f"text_{key['db_key']}", key["db_key"])
+            )
 
     # =====================================================================
-    # Tooltip Generation
+    # Layout Switcher (FIX 2 alpha wrapped)
     # =====================================================================
+    def switch_keyboard_layout(self, layout_name):
+        self._is_updating = True
+        self.wm_attributes("-alpha", 0)
+        
+        self.current_layout = layout_name
+        self.draw_keyboard()
+        self.update_heatmap_colors()
+        
+        self.update_idletasks()
+        self.wm_attributes("-alpha", 1)
+        self._is_updating = False
+
+    # =====================================================================
+    # Hover, Tooltip and Click Manager
+    # =====================================================================
+    def _get_key_from_event(self, event):
+        item = self.kbd_canvas.find_withtag("current")
+        if not item:
+            return None
+        tags = self.kbd_canvas.gettags(item[0])
+        for t in tags:
+            if t not in ["key", "keylabel", "current"] and not t.startswith("rect_") and not t.startswith("text_"):
+                return t
+        return None
+
+    def on_key_enter(self, event):
+        db_key = self._get_key_from_event(event)
+        if db_key:
+            rect_tag = f"rect_{db_key}"
+            self.kbd_canvas.itemconfig(rect_tag, outline=ACCENT, width=1.5)
+            if not self.heatmap_var.get():
+                self.kbd_canvas.itemconfig(rect_tag, fill=KEYCAP_HOVER)
+                
+            self.active_tooltip_key = db_key
+            if self.tooltip_after_id:
+                self.after_cancel(self.tooltip_after_id)
+            self.tooltip_after_id = self.after(250, lambda: self.show_key_tooltip(db_key))
+
+    def on_key_leave(self, event):
+        if self.active_tooltip_key:
+            rect_tag = f"rect_{self.active_tooltip_key}"
+            self.kbd_canvas.itemconfig(rect_tag, outline="#2F313D", width=1)
+            if not self.heatmap_var.get():
+                self.kbd_canvas.itemconfig(rect_tag, fill=self.get_key_target_color(self.active_tooltip_key))
+                
+        if self.tooltip_after_id:
+            self.after_cancel(self.tooltip_after_id)
+            self.tooltip_after_id = None
+        self.hide_key_tooltip()
+        self.active_tooltip_key = None
+
+    def on_key_click(self, event):
+        db_key = self._get_key_from_event(event)
+        if db_key:
+            self.flash_key(db_key)
+
+    # Canvas key hover tooltip without CTkToplevel (BUG 1 FIXED)
+    def show_key_tooltip(self, db_key):
+        if not db_key or db_key != self.active_tooltip_key:
+            return
+        self.hide_key_tooltip()
+        
+        text = self.get_key_tooltip_text(db_key)
+        if not text:
+            return
+            
+        self.tooltip_window = frame = customtkinter.CTkFrame(
+            self,
+            fg_color="#111318",
+            border_color="#00F5D4",
+            border_width=1,
+            corner_radius=8
+        )
+        lbl = customtkinter.CTkLabel(
+            frame, text=text, justify="left", font=(FONT_FAMILY, 10),
+            text_color=TEXT_PRIMARY, padx=12, pady=10
+        )
+        lbl.pack()
+        
+        rx = self.winfo_pointerx() - self.winfo_rootx() + 15
+        ry = self.winfo_pointery() - self.winfo_rooty() + 15
+        
+        win_w = self.winfo_width()
+        win_h = self.winfo_height()
+        frame.update_idletasks()
+        tw = frame.winfo_reqwidth()
+        th = frame.winfo_reqheight()
+        if rx + tw > win_w - 10:
+            rx = rx - tw - 30
+        if ry + th > win_h - 10:
+            ry = ry - th - 30
+            
+        frame.place(x=rx, y=ry)
+        frame.lift()
+
+    def hide_key_tooltip(self):
+        if self.tooltip_window:
+            try:
+                self.tooltip_window.destroy()
+            except Exception:
+                pass
+            self.tooltip_window = None
+
     def get_key_tooltip_text(self, db_key):
-        """Generates dynamic hover tooltip text for a key."""
         stats = self.db.get_key_stats(self.tracker.active_profile, db_key)
         
         key_label = db_key
@@ -1224,22 +1299,48 @@ class TypeTraceUI(customtkinter.CTk):
         )
 
     # =====================================================================
-    # Heatmap
+    # Heatmap Theming & Color Calculation
     # =====================================================================
     def toggle_heatmap(self):
+        self._is_updating = True
+        self.wm_attributes("-alpha", 0)
+        
         if self.heatmap_var.get():
             self.heatmap_legend.pack(fill="x", padx=20, pady=(0, 10))
             self.heatmap_legend.draw_legend(self.db.get_heatmap_theme())
+            self.update_heatmap_colors()
         else:
             self.heatmap_legend.pack_forget()
-        self.update_heatmap_colors()
+            color_map = {k: (KEYCAP_BASE, TEXT_SECONDARY) for k in self.key_buttons.keys()}
+            self._apply_key_colors(color_map)
+            
+        self.update_idletasks()
+        self.wm_attributes("-alpha", 1)
+        self._is_updating = False
+
+    # Single batch key color configuration method (BUG 2 FIXED)
+    def _apply_key_colors(self, color_map):
+        try:
+            self.wm_attributes("-alpha", 0)
+            for key_id, (bg, fg) in color_map.items():
+                btn = self.key_buttons.get(key_id)
+                if btn:
+                    if hasattr(btn, 'configure'):
+                        btn.configure(fg_color=bg, text_color=fg)
+                    rect_tag = f"rect_{key_id}"
+                    text_tag = f"text_{key_id}"
+                    self.kbd_canvas.itemconfig(rect_tag, fill=bg)
+                    self.kbd_canvas.itemconfig(text_tag, fill=fg)
+            self.update_idletasks()
+        finally:
+            self.wm_attributes("-alpha", 1)
 
     def update_heatmap_colors(self):
-        """Recalculates colors for all buttons in the virtual keyboard layout."""
+        """Recalculates colors for all buttons in the virtual keyboard layout (BUG 2 & 3 FIXED)."""
         if not self.heatmap_var.get():
-            for db_key, btn in self.key_buttons.items():
-                btn.configure(fg_color=KEYCAP_BASE, text_color=TEXT_SECONDARY, hover_color=KEYCAP_HOVER)
-            return
+            return  # don't refresh if heatmap is off
+        if self.wm_attributes("-alpha") < 1.0:
+            return  # don't refresh during another update
             
         aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
         keys_counts = aggregated.get("keys", {})
@@ -1262,7 +1363,8 @@ class TypeTraceUI(customtkinter.CTk):
         max_count = max(visible_counts) if visible_counts else 0
         theme = self.db.get_heatmap_theme()
         
-        for db_key, btn in self.key_buttons.items():
+        color_map = {}
+        for db_key in self.key_buttons.keys():
             count = keys_counts.get(db_key, 0)
             if db_key == "Kp_enter" and count == 0:
                 count = keys_counts.get("Enter", 0)
@@ -1277,10 +1379,11 @@ class TypeTraceUI(customtkinter.CTk):
                 
             factor = count / max_count if max_count > 0 else 0.0
             heatmap_color = utils.interpolate_color(factor, theme=theme)
-            btn.configure(fg_color=heatmap_color, text_color=TEXT_PRIMARY, hover_color=heatmap_color)
+            color_map[db_key] = (heatmap_color, TEXT_PRIMARY)
+            
+        self._apply_key_colors(color_map)
 
     def get_key_target_color(self, key_name):
-        """Calculates the resting color for a key cap based on current settings."""
         if self.heatmap_var.get():
             aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
             keys_counts = aggregated.get("keys", {})
@@ -1320,30 +1423,53 @@ class TypeTraceUI(customtkinter.CTk):
         else:
             return KEYCAP_BASE
 
+    def change_heatmap_theme(self, theme):
+        self._is_updating = True
+        self.wm_attributes("-alpha", 0)
+        
+        self.db.set_heatmap_theme(theme)
+        if self.heatmap_var.get():
+            self.heatmap_legend.draw_legend(theme)
+            self.update_heatmap_colors()
+            
+        self.update_idletasks()
+        self.wm_attributes("-alpha", 1)
+        self._is_updating = False
+
     # =====================================================================
-    # Key Flash Animation
+    # Key Glow Flash Animation (Canvas-based)
     # =====================================================================
     def flash_key(self, key_name):
-        """Briefly highlights a virtual key using a fade/glow effect transition."""
         try:
-            if key_name not in self.key_buttons:
+            rect_tag = f"rect_{key_name}"
+            text_tag = f"text_{key_name}"
+            
+            if not self.kbd_canvas.find_withtag(rect_tag):
                 return
                 
-            btn = self.key_buttons[key_name]
-            btn.configure(fg_color=ACCENT, text_color=TEXT_PRIMARY)
+            self.kbd_canvas.itemconfig(rect_tag, fill=ACCENT)
+            self.kbd_canvas.itemconfig(text_tag, fill=TEXT_PRIMARY)
+            self.kbd_canvas.update_idletasks()
             
-            self.after(50, lambda: self.fade_key_step(btn, key_name, 0.25))
+            self.after(50, lambda: self.fade_key_step(key_name, 0.25))
         except Exception as e:
             logging.exception(f"Error flashing key '{key_name}': {e}")
 
-    def fade_key_step(self, btn, key_name, ratio):
-        """Interpolates between the flash glow color and target color."""
+    def fade_key_step(self, key_name, ratio):
         try:
+            rect_tag = f"rect_{key_name}"
+            text_tag = f"text_{key_name}"
+            
+            if not self.kbd_canvas.find_withtag(rect_tag):
+                return
+                
             target_color = self.get_key_target_color(key_name)
             resting_text_color = TEXT_PRIMARY if self.heatmap_var.get() else TEXT_SECONDARY
             
             if ratio >= 1.0:
-                btn.configure(fg_color=target_color, text_color=resting_text_color)
+                self.kbd_canvas.itemconfig(rect_tag, fill=target_color)
+                self.kbd_canvas.itemconfig(text_tag, fill=resting_text_color)
+                self.kbd_canvas.update_idletasks()
                 return
                 
             glow_color = ACCENT
@@ -1369,24 +1495,49 @@ class TypeTraceUI(customtkinter.CTk):
             txt_b = int(c_glow_txt[2] + (c_target_txt[2] - c_glow_txt[2]) * ratio)
             fade_txt = f"#{txt_r:02x}{txt_g:02x}{txt_b:02x}"
             
-            btn.configure(fg_color=fade_bg, text_color=fade_txt)
+            self.kbd_canvas.itemconfig(rect_tag, fill=fade_bg)
+            self.kbd_canvas.itemconfig(text_tag, fill=fade_txt)
+            self.kbd_canvas.update_idletasks()
             
-            self.after(35, lambda: self.fade_key_step(btn, key_name, ratio + 0.25))
+            self.after(35, lambda: self.fade_key_step(key_name, ratio + 0.25))
         except Exception:
             pass
+
+    # =====================================================================
+    # Window Resize Debouncing (FIX 3)
+    # =====================================================================
+    def on_resize(self, event):
+        if event.widget != self:
+            return
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(120, self._apply_resize)
+
+    def _apply_resize(self):
+        self._resize_job = None
+        self._is_updating = True
+        
+        is_mapped = self.winfo_ismapped()
+        if is_mapped:
+            self.wm_attributes("-alpha", 0)
+            
+        self.draw_keyboard()
+        self.update_idletasks()
+        
+        if is_mapped:
+            self.wm_attributes("-alpha", 1)
+            
+        self._is_updating = False
 
     # =====================================================================
     # Statistics Updates
     # =====================================================================
     def update_ui_stats(self):
-        """Updates all metric displays, leaderboards, and charts."""
         try:
-            # 1. Update APM / WPM (header)
             apm, wpm = self.tracker.get_apm_wpm()
             self.header_apm_label.configure(text=f"APM: {apm}")
             self.header_wpm_label.configure(text=f"WPM: {wpm}")
             
-            # 2. Session stats mini-card
             session_dur = self.tracker.get_session_duration()
             self.session_time_lbl.configure(text=session_dur)
             self.session_keys_lbl.configure(text=f"Keys: {self.tracker.session_total_clicks}")
@@ -1396,9 +1547,8 @@ class TypeTraceUI(customtkinter.CTk):
             ratio = (backspace_clicks / total_clicks) * 100 if total_clicks > 0 else 0.0
             self.error_ratio_lbl.configure(text=f"⌫ Ratio: {ratio:.1f}%")
             
-            # 3. Leaderboard mini-card
+            # Leaderboard
             aggregated = self.db.get_aggregated_stats(self.tracker.active_profile)
-            
             sorted_keys = sorted(aggregated.get("keys", {}).items(), key=lambda x: x[1], reverse=True)[:len(self.top_keys_labels)]
             for idx in range(len(self.top_keys_labels)):
                 lbl = self.top_keys_labels[idx]
@@ -1420,7 +1570,7 @@ class TypeTraceUI(customtkinter.CTk):
                 else:
                     lbl.configure(text=f"{idx+1}. —")
                     
-            # 4. Burst records mini-card
+            # Bursts
             bursts = self.db.get_burst_records(self.tracker.active_profile)
             self.total_bursts_lbl.configure(text=f"{len(bursts)} recorded")
             for idx in range(len(self.burst_labels)):
@@ -1431,16 +1581,14 @@ class TypeTraceUI(customtkinter.CTk):
                 else:
                     lbl.configure(text=f"{idx+1}. —")
                     
-            # 5. Hourly Productivity Chart
+            # Chart
             profile = self.tracker.active_profile
             hourly_data = self.db.data.get("profiles", {}).get(profile, {}).get("hourly", {})
             self.chart_canvas.draw_chart(hourly_data)
             
-            # 6. Floating Overlay stats
             if self.overlay:
                 self.overlay.update_stats(apm, wpm)
                 
-            # 7. LED indicator based on APM
             if apm >= 250:
                 self.led_canvas.itemconfig(self.led_circle, fill=ACCENT)
                 self.led_lbl.configure(text_color=ACCENT)
@@ -1448,7 +1596,6 @@ class TypeTraceUI(customtkinter.CTk):
                 self.led_canvas.itemconfig(self.led_circle, fill="#333333")
                 self.led_lbl.configure(text_color=TEXT_SECONDARY)
                 
-            # 8. Update status bar and header dot based on incognito state
             if self.incognito_var.get():
                 self.status_left_lbl.configure(text="System Status: Incognito Active", text_color=DANGER)
                 self.status_text.configure(text="Incognito", text_color=DANGER)
@@ -1460,17 +1607,26 @@ class TypeTraceUI(customtkinter.CTk):
             logging.exception(f"Error updating UI stats: {e}")
 
     def run_background_updates(self):
-        """Periodically runs background statistics updates and saves data to disk."""
+        """Periodically runs background updates, rate-limiting UI updates (FIX 5 & BUG 3 FIXED)."""
         try:
-            self.update_ui_stats()
             self.db.save_data()
+            
+            # Skip UI updates if window is minimized or hidden in system tray
+            if self.state() in ["iconic", "withdrawn"]:
+                return
+                
+            # Skip if a resize or theme change operation is already active
+            if self._is_updating:
+                return
+                
+            self.update_ui_stats()
             if self.heatmap_var.get():
                 self.update_heatmap_colors()
         except Exception as e:
             logging.exception(f"Error in background update loop: {e}")
         finally:
             try:
-                self.after(1500, self.run_background_updates)
+                self.after(1000, self.run_background_updates)
             except Exception:
                 pass
 
@@ -1538,18 +1694,11 @@ class TypeTraceUI(customtkinter.CTk):
                 self.overlay = None
 
     def update_incognito_ui_state(self, value):
-        """Callback to sync external hotkey triggers with UI controls."""
         self.incognito_var.set(value)
         self.toggle_incognito()
 
     def toggle_startup(self):
         utils.set_startup(self.startup_var.get())
-
-    def change_heatmap_theme(self, theme):
-        self.db.set_heatmap_theme(theme)
-        if self.heatmap_var.get():
-            self.heatmap_legend.draw_legend(theme)
-            self.update_heatmap_colors()
 
     # =====================================================================
     # Dialogs & Exports
@@ -1606,15 +1755,12 @@ class TypeTraceUI(customtkinter.CTk):
     # Window Management
     # =====================================================================
     def withdraw_to_tray(self):
-        """Hides UI main window, putting the application in system background/tray."""
         self.withdraw()
 
     def restore_from_tray(self):
-        """Restores window from system tray thread-safely."""
         self.after(0, self.mostra_finestra)
 
     def mostra_finestra(self):
-        """Brings the window back to the foreground."""
         self.deiconify()
         self.lift()
         self.focus_force()
@@ -1623,10 +1769,6 @@ class TypeTraceUI(customtkinter.CTk):
     # Thread-Safe Event Queue Processing
     # =====================================================================
     def process_event_queue(self, event_queue):
-        """
-        Periodically pulls events from the thread-safe queue on the main GUI thread.
-        This prevents thread violations and segfaults from background threads.
-        """
         for _ in range(50):
             try:
                 event_type, val = event_queue.get_nowait()
@@ -1641,7 +1783,6 @@ class TypeTraceUI(customtkinter.CTk):
             pass
 
     def handle_thread_event(self, event_type, val):
-        """Processes a dequeued event safely on the main GUI thread."""
         try:
             if event_type == "keystroke":
                 self.flash_key(val)
