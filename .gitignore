@@ -14,3 +14,17 @@ dist/
 *.spec
 *.json
 *.log
+# Log e database locale
+typetrace.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Virtual environment
+venv/
+.venv/
+
+# PyInstaller
+dist/
+build/
+*.spec
