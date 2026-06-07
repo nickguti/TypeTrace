@@ -18,6 +18,7 @@
 - **🎛️ Floating In-Game Overlay:** A compact, borderless, always-on-top draggable widget showing live APM counter.
 
 ---
+![TypeTrace Demo](assets/demo.gif)
 
 ## 🚀 Quick Start (For General Users)
 
