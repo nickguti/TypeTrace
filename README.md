@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 
 **TypeTrace** is a modern, thread-safe, and dark-themed desktop application written in Python to track, analyze, and visualize your typing habits and gaming performance globally in real-time.
-
+![TypeTrace Screenshot](assets/screenshot.png)
 ---
 
 ## ⌨️ Key Features
