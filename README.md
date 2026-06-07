@@ -68,6 +68,16 @@ If you prefer to run the application from source or customize it, follow these s
    ```bash
    python main.py
    ```
+---
+
+## 🗺️ Roadmap
+
+- [ ] Linux & macOS support
+- [ ] Weekly PDF report export
+- [ ] Multi-language UI (EN / IT / ES)
+- [ ] More heatmap themes
+- [ ] Web dashboard (optional companion)
+- [ ] Plugin system for custom analytics
 
 ---
 ## 📄 License
