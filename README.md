@@ -65,22 +65,6 @@ If you prefer to run the application from source or customize it, follow these s
    ```
 
 ---
-
-## 📐 Architecture
-
-TypeTrace is designed with modularity, performance, and thread-safety in mind. Below is an overview of the core files that make up the project:
-
-| File Name | Description |
-| :--- | :--- |
-| `[main.py](file:///C:/Users/nicolas/.gemini/antigravity/scratch/typetrace/main.py)` | The main entry point of the application. Manages high-level startup configuration, thread orchestration, tray icon integration, and the shutdown pipeline. |
-| `[ui.py](file:///C:/Users/nicolas/.gemini/antigravity/scratch/typetrace/ui.py)` | Contains the CustomTkinter GUI layout. Implements the keyboard builder, layouts, statistics display, settings tabs, and the customizable dashboard. |
-| `[tracker.py](file:///C:/Users/nicolas/.gemini/antigravity/scratch/typetrace/tracker.py)` | Handles keyboard hooks globally via `pynput`. Tracks keystrokes, monitors modifier keys, measures APM/WPM, and runs background burst-detection logic. |
-| `[database.py](file:///C:/Users/nicolas/.gemini/antigravity/scratch/typetrace/database.py)` | Manages local storage persistence using thread-safe JSON. Encapsulates all profiling data and keystroke metrics under a strict `RLock` synchronization barrier. |
-| `[utils.py](file:///C:/Users/nicolas/.gemini/antigravity/scratch/typetrace/utils.py)` | Houses helper utilities, such as color interpolation models, automated shortcut generators, telemetry exports, and Windows API wrappers. |
-| `[overlay.py](file:///C:/Users/nicolas/.gemini/antigravity/scratch/typetrace/overlay.py)` | Manages the floating, transparent, always-on-top APM widget that overlays in-game screens. |
-
----
-
 ## 📄 License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
