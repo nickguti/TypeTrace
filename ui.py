@@ -1107,115 +1107,222 @@ class TypeTraceUI(customtkinter.CTk):
                 pass
 
     # =====================================================================
-    # Native C-Grid Keyboard Generation & Layout (FIX)
+    # Native Grid Keyboard Generation & Layout
     # =====================================================================
     def generate_keyboard(self):
+        # Destroy previous key buttons
         if hasattr(self, 'key_buttons') and isinstance(self.key_buttons, dict):
             for btn in self.key_buttons.values():
                 if hasattr(btn, 'destroy'):
                     btn.destroy()
 
+        # Destroy previous sub-frames
+        for attr in ('left_keyboard_frame', 'nav_keyboard_frame', 'numpad_keyboard_frame'):
+            if hasattr(self, attr):
+                frame = getattr(self, attr)
+                if frame and hasattr(frame, 'destroy'):
+                    frame.destroy()
+        # Clear any leftover children in keyboard_container
+        for child in self.keyboard_container.winfo_children():
+            child.destroy()
+
         self.keys_data = []
-        
-        # 1. Parse Left block
-        for row_idx, row_keys in enumerate(LEFT_KEYBOARD_LAYOUT):
-            current_col = 0
-            for label, span, db_key in row_keys:
-                if db_key == "spacer":
-                    current_col += span
-                    continue
-                self.keys_data.append({
-                    "db_key": db_key,
-                    "label": label,
-                    "block": "left",
-                    "row": row_idx,
-                    "col": current_col,
-                    "colspan": span,
-                    "rowspan": 1
-                })
-                current_col += span
-                
-        # 2. Parse Nav block
-        for row_idx, row_keys in enumerate(NAV_KEYBOARD_LAYOUT):
-            for col_idx, (label, span, db_key) in enumerate(row_keys):
-                if db_key == "spacer" or label == "empty":
-                    continue
-                self.keys_data.append({
-                    "db_key": db_key,
-                    "label": label,
-                    "block": "nav",
-                    "row": row_idx,
-                    "col": col_idx * 4,
-                    "colspan": span * 4,
-                    "rowspan": 1
-                })
-                
-        # 3. Parse Numpad block
-        for label, row, col, rowspan, colspan, db_key in NUMPAD_KEYBOARD_LAYOUT:
-            if db_key == "spacer":
-                continue
-            self.keys_data.append({
-                "db_key": db_key,
-                "label": label,
-                "block": "numpad",
-                "row": row,
-                "col": col * 4,
-                "colspan": colspan * 4,
-                "rowspan": rowspan
-            })
-            
         self.key_buttons = {}
         self.tooltips = {}
-        
-        for r in range(6):
-            self.keyboard_container.grid_rowconfigure(r, weight=1, uniform="key_row")
-        for c in range(96):
-            self.keyboard_container.grid_columnconfigure(c, weight=1, uniform="key_col")
 
         # Centralized Tooltip State
         self.active_tooltip_key = None
         self.tooltip_window = None
         self.tooltip_after_id = None
+
+        # Determine which blocks are visible
+        show_nav = self.current_layout in ["ANSI 100%", "TKL", "75%", "65%"]
+        show_numpad = self.current_layout == "ANSI 100%"
+        row_start = 1 if self.current_layout in ["65%", "60%"] else 0
+
+        # --- Configure keyboard_container columns with proportional weights ---
+        self.keyboard_container.grid_rowconfigure(0, weight=1)
         
-        for key in self.keys_data:
-            if not self.is_key_visible(key, self.current_layout):
+        # Reset all 3 columns first
+        for ci in range(3):
+            self.keyboard_container.grid_columnconfigure(ci, weight=0, minsize=0)
+        
+        self.keyboard_container.grid_columnconfigure(0, weight=10, minsize=550)
+        if show_nav:
+            self.keyboard_container.grid_columnconfigure(1, weight=2, minsize=110)
+        if show_numpad:
+            self.keyboard_container.grid_columnconfigure(2, weight=3, minsize=130)
+
+        # --- LEFT BLOCK (Alphanumeric) ---
+        self.left_keyboard_frame = customtkinter.CTkFrame(self.keyboard_container, fg_color="transparent")
+        self.left_keyboard_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+
+        for row_idx, row_keys in enumerate(LEFT_KEYBOARD_LAYOUT):
+            if row_idx < row_start:
                 continue
+            display_row = row_idx - row_start
+            
+            row_frame = customtkinter.CTkFrame(self.left_keyboard_frame, fg_color="transparent")
+            row_frame.pack(fill="x", expand=True, pady=2, padx=5)
+            
+            key_height = 24 if row_idx == 0 else 28
+            
+            col = 0
+            for label, span, db_key in row_keys:
+                row_frame.columnconfigure(col, weight=span)
                 
-            db_key = key["db_key"]
-            label = key["label"]
-            r = key["row"]
-            c = key["col"]
-            rs = key["rowspan"]
-            cs = key["colspan"]
-            
-            if key["block"] == "nav":
-                c += 64
-            elif key["block"] == "numpad":
-                c += 80
+                if db_key == "spacer":
+                    spacer = customtkinter.CTkFrame(row_frame, fg_color="transparent", height=key_height)
+                    spacer.grid(row=0, column=col, sticky="ew", padx=2, pady=2)
+                    col += 1
+                    continue
 
-            row_start = 1 if self.current_layout in ["65%", "60%"] else 0
-            r -= row_start
-            if r < 0:
-                continue
+                self.keys_data.append({
+                    "db_key": db_key,
+                    "label": label,
+                    "block": "left",
+                    "row": row_idx,
+                    "col": col,
+                    "colspan": 1,
+                    "rowspan": 1
+                })
+                
+                btn = customtkinter.CTkButton(
+                    row_frame,
+                    text=label,
+                    height=key_height,
+                    font=(FONT_FAMILY, 11, "bold"),
+                    fg_color=self.get_key_target_color(db_key),
+                    text_color=TEXT_PRIMARY if self.heatmap_var.get() else TEXT_SECONDARY,
+                    hover_color=KEYCAP_HOVER,
+                    corner_radius=6,
+                    border_width=1,
+                    border_color="#2F313D"
+                )
+                btn.bind("<Enter>", lambda e, k=db_key: self.on_key_enter_btn(k))
+                btn.bind("<Leave>", lambda e, k=db_key: self.on_key_leave_btn(k))
+                btn.bind("<Button-1>", lambda e, k=db_key: self.on_key_click_btn(k))
+                btn.grid(row=0, column=col, sticky="ew", padx=2, pady=2)
+                self.key_buttons[db_key] = btn
+                col += 1
 
-            btn = customtkinter.CTkButton(
-                self.keyboard_container,
-                text=label,
-                font=(FONT_FAMILY, 11, "bold"),
-                fg_color=self.get_key_target_color(db_key),
-                text_color=TEXT_PRIMARY if self.heatmap_var.get() else TEXT_SECONDARY,
-                hover_color=KEYCAP_HOVER,
-                corner_radius=6,
-                border_width=1,
-                border_color="#2F313D"
-            )
+        # --- NAV BLOCK ---
+        if show_nav:
+            self.nav_keyboard_frame = customtkinter.CTkFrame(self.keyboard_container, fg_color="transparent")
+            self.nav_keyboard_frame.grid(row=0, column=1, sticky="nsew", padx=4)
             
-            btn.bind("<Enter>", lambda e, k=db_key: self.on_key_enter_btn(k))
-            btn.bind("<Leave>", lambda e, k=db_key: self.on_key_leave_btn(k))
-            btn.bind("<Button-1>", lambda e, k=db_key: self.on_key_click_btn(k))
+            for row_idx, row_keys in enumerate(NAV_KEYBOARD_LAYOUT):
+                if row_idx < row_start:
+                    continue
+                display_row = row_idx - row_start
+                
+                row_frame = customtkinter.CTkFrame(self.nav_keyboard_frame, fg_color="transparent")
+                row_frame.pack(fill="x", expand=True, pady=2, padx=2)
+                
+                key_height = 24 if row_idx == 0 else 28
+                
+                col = 0
+                for label, span, db_key in row_keys:
+                    row_frame.columnconfigure(col, weight=1)
+                    
+                    if db_key == "spacer" or label == "empty":
+                        spacer = customtkinter.CTkFrame(row_frame, fg_color="transparent", height=key_height)
+                        spacer.grid(row=0, column=col, sticky="ew", padx=2, pady=2)
+                        col += 1
+                        continue
+                    
+                    # 65% layout only shows arrow keys from nav
+                    if self.current_layout == "65%" and db_key not in ["Up", "Down", "Left", "Right"]:
+                        spacer = customtkinter.CTkFrame(row_frame, fg_color="transparent", height=key_height)
+                        spacer.grid(row=0, column=col, sticky="ew", padx=2, pady=2)
+                        col += 1
+                        continue
+                    
+                    self.keys_data.append({
+                        "db_key": db_key,
+                        "label": label,
+                        "block": "nav",
+                        "row": row_idx,
+                        "col": col,
+                        "colspan": 1,
+                        "rowspan": 1
+                    })
+                    
+                    btn = customtkinter.CTkButton(
+                        row_frame,
+                        text=label,
+                        height=key_height,
+                        font=(FONT_FAMILY, 11, "bold"),
+                        fg_color=self.get_key_target_color(db_key),
+                        text_color=TEXT_PRIMARY if self.heatmap_var.get() else TEXT_SECONDARY,
+                        hover_color=KEYCAP_HOVER,
+                        corner_radius=6,
+                        border_width=1,
+                        border_color="#2F313D"
+                    )
+                    btn.bind("<Enter>", lambda e, k=db_key: self.on_key_enter_btn(k))
+                    btn.bind("<Leave>", lambda e, k=db_key: self.on_key_leave_btn(k))
+                    btn.bind("<Button-1>", lambda e, k=db_key: self.on_key_click_btn(k))
+                    btn.grid(row=0, column=col, sticky="ew", padx=2, pady=2)
+                    self.key_buttons[db_key] = btn
+                    col += 1
+        else:
+            self.nav_keyboard_frame = None
+
+        # --- NUMPAD BLOCK ---
+        if show_numpad:
+            self.numpad_keyboard_frame = customtkinter.CTkFrame(self.keyboard_container, fg_color="transparent")
+            self.numpad_keyboard_frame.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
             
-            btn.grid(row=r, column=c, rowspan=rs, columnspan=cs, sticky="nsew", padx=2, pady=2)
-            self.key_buttons[db_key] = btn
+            # Numpad uses a true grid because of rowspan keys (+ and Enter)
+            num_rows = 6 - row_start
+            num_cols = 4
+            for ri in range(num_rows):
+                self.numpad_keyboard_frame.grid_rowconfigure(ri, weight=1)
+            for ci in range(num_cols):
+                self.numpad_keyboard_frame.grid_columnconfigure(ci, weight=1)
+            
+            for label, row, col, rowspan, colspan, db_key in NUMPAD_KEYBOARD_LAYOUT:
+                if row < row_start:
+                    continue
+                display_row = row - row_start
+                
+                if db_key == "spacer":
+                    spacer = customtkinter.CTkFrame(self.numpad_keyboard_frame, fg_color="transparent")
+                    spacer.grid(row=display_row, column=col, columnspan=colspan, rowspan=rowspan, sticky="nsew", padx=2, pady=2)
+                    continue
+                
+                key_height = 24 if row == 0 else 28
+                
+                self.keys_data.append({
+                    "db_key": db_key,
+                    "label": label,
+                    "block": "numpad",
+                    "row": row,
+                    "col": col,
+                    "colspan": colspan,
+                    "rowspan": rowspan
+                })
+                
+                btn = customtkinter.CTkButton(
+                    self.numpad_keyboard_frame,
+                    text=label,
+                    height=key_height,
+                    font=(FONT_FAMILY, 11, "bold"),
+                    fg_color=self.get_key_target_color(db_key),
+                    text_color=TEXT_PRIMARY if self.heatmap_var.get() else TEXT_SECONDARY,
+                    hover_color=KEYCAP_HOVER,
+                    corner_radius=6,
+                    border_width=1,
+                    border_color="#2F313D"
+                )
+                btn.bind("<Enter>", lambda e, k=db_key: self.on_key_enter_btn(k))
+                btn.bind("<Leave>", lambda e, k=db_key: self.on_key_leave_btn(k))
+                btn.bind("<Button-1>", lambda e, k=db_key: self.on_key_click_btn(k))
+                btn.grid(row=display_row, column=col, rowspan=rowspan, columnspan=colspan, sticky="nsew", padx=2, pady=2)
+                self.key_buttons[db_key] = btn
+        else:
+            self.numpad_keyboard_frame = None
 
     def is_key_visible(self, key_data, layout_name):
         block = key_data["block"]
