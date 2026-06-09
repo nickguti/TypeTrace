@@ -1,4 +1,11 @@
+#!/usr/bin/env python3
+"""Build script that writes the complete ui.py with all 15 features."""
 import os
+
+TARGET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui.py")
+
+# ─── PART 1: IMPORTS, CONSTANTS, THEMES, KEYBOARD LAYOUT ───
+PART1 = r'''import os
 import sys
 import json
 import math
@@ -122,7 +129,10 @@ def interpolate_color_ramp(val, ramp):
             return QColor(r, g, b)
     return QColor(ramp[-1][1])
 
-KEYBOARD_LAYOUT = [
+'''
+
+# ─── KEYBOARD LAYOUT ───
+KEYBOARD_LAYOUT_STR = '''KEYBOARD_LAYOUT = [
     {"id": "Esc", "label": "Esc", "rx": 0.0, "ry": 0.0, "rw": 0.0417, "rh": 0.155},
     {"id": "F1", "label": "F1", "rx": 0.0833, "ry": 0.0, "rw": 0.0417, "rh": 0.155},
     {"id": "F2", "label": "F2", "rx": 0.125, "ry": 0.0, "rw": 0.0417, "rh": 0.155},
@@ -173,7 +183,7 @@ KEYBOARD_LAYOUT = [
     {"id": "P", "label": "P", "rx": 0.4375, "ry": 0.34, "rw": 0.0417, "rh": 0.155},
     {"id": "[", "label": "[", "rx": 0.4792, "ry": 0.34, "rw": 0.0417, "rh": 0.155},
     {"id": "]", "label": "]", "rx": 0.5208, "ry": 0.34, "rw": 0.0417, "rh": 0.155},
-    {"id": "\\", "label": "\\", "rx": 0.5625, "ry": 0.34, "rw": 0.0625, "rh": 0.155},
+    {"id": "\\\\", "label": "\\\\", "rx": 0.5625, "ry": 0.34, "rw": 0.0625, "rh": 0.155},
     {"id": "Delete", "label": "Del", "rx": 0.6458, "ry": 0.34, "rw": 0.0417, "rh": 0.155},
     {"id": "End", "label": "End", "rx": 0.6875, "ry": 0.34, "rw": 0.0417, "rh": 0.155},
     {"id": "Page_down", "label": "PgDn", "rx": 0.7292, "ry": 0.34, "rw": 0.0417, "rh": 0.155},
@@ -209,7 +219,7 @@ KEYBOARD_LAYOUT = [
     {"id": ".", "label": ".", "rx": 0.4271, "ry": 0.68, "rw": 0.0417, "rh": 0.155},
     {"id": "/", "label": "/", "rx": 0.4688, "ry": 0.68, "rw": 0.0417, "rh": 0.155},
     {"id": "Shift_R", "label": "Shift", "rx": 0.5104, "ry": 0.68, "rw": 0.1146, "rh": 0.155},
-    {"id": "Up", "label": "↑", "rx": 0.6875, "ry": 0.68, "rw": 0.0417, "rh": 0.155},
+    {"id": "Up", "label": "\u2191", "rx": 0.6875, "ry": 0.68, "rw": 0.0417, "rh": 0.155},
     {"id": "Kp_1", "label": "1", "rx": 0.7917, "ry": 0.68, "rw": 0.0417, "rh": 0.155},
     {"id": "Kp_2", "label": "2", "rx": 0.8333, "ry": 0.68, "rw": 0.0417, "rh": 0.155},
     {"id": "Kp_3", "label": "3", "rx": 0.875, "ry": 0.68, "rw": 0.0417, "rh": 0.155},
@@ -222,14 +232,17 @@ KEYBOARD_LAYOUT = [
     {"id": "Win_R", "label": "Win", "rx": 0.4688, "ry": 0.85, "rw": 0.0521, "rh": 0.155},
     {"id": "Menu", "label": "Fn", "rx": 0.5208, "ry": 0.85, "rw": 0.0521, "rh": 0.155},
     {"id": "Ctrl_R", "label": "Ctrl", "rx": 0.5729, "ry": 0.85, "rw": 0.0521, "rh": 0.155},
-    {"id": "Left", "label": "←", "rx": 0.6458, "ry": 0.85, "rw": 0.0417, "rh": 0.155},
-    {"id": "Down", "label": "↓", "rx": 0.6875, "ry": 0.85, "rw": 0.0417, "rh": 0.155},
-    {"id": "Right", "label": "→", "rx": 0.7292, "ry": 0.85, "rw": 0.0417, "rh": 0.155},
+    {"id": "Left", "label": "\u2190", "rx": 0.6458, "ry": 0.85, "rw": 0.0417, "rh": 0.155},
+    {"id": "Down", "label": "\u2193", "rx": 0.6875, "ry": 0.85, "rw": 0.0417, "rh": 0.155},
+    {"id": "Right", "label": "\u2192", "rx": 0.7292, "ry": 0.85, "rw": 0.0417, "rh": 0.155},
     {"id": "Kp_0", "label": "0", "rx": 0.7917, "ry": 0.85, "rw": 0.0833, "rh": 0.155},
     {"id": "Kp_.", "label": ".", "rx": 0.875, "ry": 0.85, "rw": 0.0417, "rh": 0.155},
 ]
 
-class KeyTooltip(QWidget):
+'''
+
+# ─── PART 2: WIDGET CLASSES ───
+PART2 = '''class KeyTooltip(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
@@ -424,7 +437,10 @@ class LegendBarWidget(QWidget):
                 painter.setPen(hex_to_qcolor(TEXT_SECONDARY))
                 painter.drawText(QRectF(tx + ox, bar_y + bar_h + 6, w_t, 14), align | Qt.AlignmentFlag.AlignVCenter, f"{val}%")
 
-class KeyboardHeatmapWidget(QWidget):
+'''
+
+# ─── PART 3: KeyboardHeatmapWidget ───
+PART3 = '''class KeyboardHeatmapWidget(QWidget):
     ASPECT_RATIO = 3.6
 
     def __init__(self, parent=None):
@@ -669,7 +685,10 @@ class KeyboardHeatmapWidget(QWidget):
         self.tooltip.hide()
         super().leaveEvent(event)
 
-class HourlyChartWidget(QWidget):
+'''
+
+# ─── PART 4: HourlyChart, MiniCard, IncognitoOverlay ───
+PART4 = '''class HourlyChartWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.hourly_data = {}
@@ -800,7 +819,10 @@ class IncognitoOverlay(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(QRectF(1.5, 1.5, self.width() - 3, self.height() - 3), 8, 8)
 
-class TypeTraceUI(QMainWindow):
+'''
+
+# ─── PART 5: TypeTraceUI class ───
+PART5 = '''class TypeTraceUI(QMainWindow):
     _trigger_profile_switch = pyqtSignal(str, str)
     _trigger_incognito = pyqtSignal(bool)
 
@@ -817,7 +839,7 @@ class TypeTraceUI(QMainWindow):
         self.heatmap_enabled = False
         self.viewing_profile = self.tracker.active_profile
         self.incognito_active = False
-        self.setWindowTitle("TypeTrace \u2014 Keystroke Analytics")
+        self.setWindowTitle("TypeTrace \\u2014 Keystroke Analytics")
         self.resize(1500, 820)
         self.setMinimumSize(1000, 600)
         central = QWidget()
@@ -841,9 +863,9 @@ class TypeTraceUI(QMainWindow):
         kbd_container.addWidget(self.heatmap_legend)
         body_layout.addLayout(kbd_container, 3)
         self.tab_bar = QTabBar()
-        self.tab_bar.addTab("\u2699\ufe0f Configuration")
-        self.tab_bar.addTab("\U0001f4ca Telemetry")
-        self.tab_bar.addTab("\U0001f4c8 Hourly Chart")
+        self.tab_bar.addTab("\\u2699\\ufe0f Configuration")
+        self.tab_bar.addTab("\\U0001f4ca Telemetry")
+        self.tab_bar.addTab("\\U0001f4c8 Hourly Chart")
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
         self.stacked_widget = QStackedWidget()
         self.stacked_widget.addWidget(self._build_config_tab())
@@ -920,7 +942,7 @@ class TypeTraceUI(QMainWindow):
         self.profile_btn_group = QButtonGroup(self)
         self.profile_btn_group.setExclusive(True)
         self.chips = {}
-        for name, icon in [("Total", "\U0001f310"), ("Desktop", "\U0001f5a5\ufe0f"), ("Gaming", "\U0001f3ae")]:
+        for name, icon in [("Total", "\\U0001f310"), ("Desktop", "\\U0001f5a5\\ufe0f"), ("Gaming", "\\U0001f3ae")]:
             btn = QPushButton(f"{icon} {name}")
             btn.setFixedHeight(28)
             btn.setMinimumWidth(max(60, len(name) * 9 + 20))
@@ -932,7 +954,7 @@ class TypeTraceUI(QMainWindow):
             self.chips[name] = btn
         self.profile_combobox = QComboBox()
         self.profile_combobox.addItems(self._get_custom_profiles())
-        self.profile_combobox.setPlaceholderText("custom \u25be")
+        self.profile_combobox.setPlaceholderText("custom \\u25be")
         self.profile_combobox.setCurrentIndex(-1)
         self.profile_combobox.currentTextChanged.connect(self._on_custom_profile_selected)
         profile_row.addWidget(self.profile_combobox)
@@ -940,7 +962,7 @@ class TypeTraceUI(QMainWindow):
         add_btn.setFixedSize(28, 28)
         add_btn.clicked.connect(self._create_profile_dialog)
         profile_row.addWidget(add_btn)
-        self.del_profile_btn = QPushButton("\U0001f5d1")
+        self.del_profile_btn = QPushButton("\\U0001f5d1")
         self.del_profile_btn.setFixedSize(28, 28)
         self.del_profile_btn.setStyleSheet("background: #A63A50; color: #FFFFFF; border: none;")
         self.del_profile_btn.clicked.connect(self._delete_active_profile)
@@ -962,18 +984,18 @@ class TypeTraceUI(QMainWindow):
         grid.addLayout(left_col, 0, 0)
         right_col = QVBoxLayout()
         right_col.setSpacing(4)
-        self.heatmap_check = QCheckBox("\U0001f525 Heatmap View")
+        self.heatmap_check = QCheckBox("\\U0001f525 Heatmap View")
         self.heatmap_check.stateChanged.connect(self._toggle_heatmap)
         right_col.addWidget(self.heatmap_check)
-        self.incognito_check = QCheckBox("\U0001f575\ufe0f Incognito Mode")
+        self.incognito_check = QCheckBox("\\U0001f575\\ufe0f Incognito Mode")
         self.incognito_check.setChecked(self.tracker.incognito_mode)
         self.incognito_check.stateChanged.connect(self._toggle_incognito)
         right_col.addWidget(self.incognito_check)
-        self.overlay_check = QCheckBox("\U0001f4fa Floating Widget")
+        self.overlay_check = QCheckBox("\\U0001f4fa Floating Widget")
         self.overlay_check.setChecked(self.db.get_overlay_enabled())
         self.overlay_check.stateChanged.connect(self._toggle_overlay)
         right_col.addWidget(self.overlay_check)
-        self.startup_check = QCheckBox("\U0001f4bb Boot Startup")
+        self.startup_check = QCheckBox("\\U0001f4bb Boot Startup")
         self.startup_check.setChecked(utils.is_startup_enabled())
         self.startup_check.stateChanged.connect(self._toggle_startup)
         right_col.addWidget(self.startup_check)
@@ -982,12 +1004,12 @@ class TypeTraceUI(QMainWindow):
         layout.addLayout(grid)
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
-        auto_btn = QPushButton("\U0001f504 Auto-Switch")
+        auto_btn = QPushButton("\\U0001f504 Auto-Switch")
         auto_btn.setFixedHeight(40)
         auto_btn.setMinimumWidth(120)
         auto_btn.clicked.connect(self._open_mappings_dialog)
         btn_row.addWidget(auto_btn)
-        csv_btn = QPushButton("\U0001f4c4 CSV Export")
+        csv_btn = QPushButton("\\U0001f4c4 CSV Export")
         csv_btn.setFixedHeight(40)
         csv_btn.setMinimumWidth(120)
         csv_btn.clicked.connect(self._export_csv)
@@ -997,7 +1019,7 @@ class TypeTraceUI(QMainWindow):
         json_btn.setMinimumWidth(120)
         json_btn.clicked.connect(self._export_json)
         btn_row.addWidget(json_btn)
-        reset_btn = QPushButton("\u26a0 Reset")
+        reset_btn = QPushButton("\\u26a0 Reset")
         reset_btn.setFixedHeight(40)
         reset_btn.setMinimumWidth(120)
         reset_btn.setStyleSheet("background: transparent; color: #A63A50; border: 1px solid #A63A50; font-size: 14px; font-weight: 500;")
@@ -1026,7 +1048,7 @@ class TypeTraceUI(QMainWindow):
         self.session_keys_lbl = QLabel("Keys: 0")
         self.session_keys_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; background: transparent;")
         sc_layout.addWidget(self.session_keys_lbl)
-        self.error_ratio_lbl = QLabel("\u232b Ratio: 0.0%")
+        self.error_ratio_lbl = QLabel("\\u232b Ratio: 0.0%")
         self.error_ratio_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; background: transparent;")
         sc_layout.addWidget(self.error_ratio_lbl)
         sc_layout.addStretch()
@@ -1040,7 +1062,7 @@ class TypeTraceUI(QMainWindow):
         lc_layout.addWidget(lc_title)
         self.top_keys_labels = []
         for i in range(3):
-            lbl = QLabel(f"{i+1}. \u2014")
+            lbl = QLabel(f"{i+1}. \\u2014")
             lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; font-family: Consolas; font-weight: bold; background: transparent;")
             lc_layout.addWidget(lbl)
             self.top_keys_labels.append(lbl)
@@ -1049,7 +1071,7 @@ class TypeTraceUI(QMainWindow):
         lc_layout.addWidget(combo_title)
         self.top_combos_labels = []
         for i in range(2):
-            lbl = QLabel(f"{i+1}. \u2014")
+            lbl = QLabel(f"{i+1}. \\u2014")
             lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; font-family: Consolas; font-weight: bold; background: transparent;")
             lc_layout.addWidget(lbl)
             self.top_combos_labels.append(lbl)
@@ -1070,7 +1092,7 @@ class TypeTraceUI(QMainWindow):
         bc_layout.addWidget(records_title)
         self.burst_labels = []
         for i in range(3):
-            lbl = QLabel(f"{i+1}. \u2014")
+            lbl = QLabel(f"{i+1}. \\u2014")
             lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; font-family: Consolas; font-weight: bold; background: transparent;")
             bc_layout.addWidget(lbl)
             self.burst_labels.append(lbl)
@@ -1128,7 +1150,7 @@ class TypeTraceUI(QMainWindow):
             total_clicks = sum(keys_data.values())
             backspace_clicks = keys_data.get("Backspace", 0) + keys_data.get("Delete", 0)
             ratio = (backspace_clicks / total_clicks) * 100 if total_clicks > 0 else 0.0
-            self.error_ratio_lbl.setText(f"\u232b Ratio: {ratio:.1f}%")
+            self.error_ratio_lbl.setText(f"\\u232b Ratio: {ratio:.1f}%")
             sorted_keys = sorted(keys_data.items(), key=lambda x: x[1], reverse=True)[:len(self.top_keys_labels)]
             for idx in range(len(self.top_keys_labels)):
                 lbl = self.top_keys_labels[idx]
@@ -1141,7 +1163,7 @@ class TypeTraceUI(QMainWindow):
                         k_lbl = "Num" + k.replace("Kp_", "")
                     lbl.setText(f"{idx+1}. {k_lbl} : {count}")
                 else:
-                    lbl.setText(f"{idx+1}. \u2014")
+                    lbl.setText(f"{idx+1}. \\u2014")
             sorted_combos = sorted(aggregated.get("combinations", {}).items(), key=lambda x: x[1], reverse=True)[:len(self.top_combos_labels)]
             for idx in range(len(self.top_combos_labels)):
                 lbl = self.top_combos_labels[idx]
@@ -1149,7 +1171,7 @@ class TypeTraceUI(QMainWindow):
                     combo, count = sorted_combos[idx]
                     lbl.setText(f"{idx+1}. {combo} : {count}")
                 else:
-                    lbl.setText(f"{idx+1}. \u2014")
+                    lbl.setText(f"{idx+1}. \\u2014")
             bursts = self.db.get_burst_records(self.viewing_profile)
             self.total_bursts_lbl.setText(f"{len(bursts)} recorded")
             for idx in range(len(self.burst_labels)):
@@ -1158,7 +1180,7 @@ class TypeTraceUI(QMainWindow):
                     record = bursts[idx]
                     lbl.setText(f"{idx+1}. {record['peak_apm']}APM {record['duration']}s")
                 else:
-                    lbl.setText(f"{idx+1}. \u2014")
+                    lbl.setText(f"{idx+1}. \\u2014")
             profile_data = self.db.get_stats_for_profile(self.viewing_profile)
             hourly_data = profile_data.get("hourly", {})
             self.hourly_chart.set_data(hourly_data)
@@ -1315,7 +1337,7 @@ class TypeTraceUI(QMainWindow):
         if profile in ("Default", "Total", "Desktop", "Gaming"):
             QMessageBox.warning(self, "Error", "Cannot delete protected profiles.")
             return
-        reply = QMessageBox.question(self, "Confirm Delete", f"Are you sure you want to delete profile '{profile}'?\nAll statistics will be permanently lost.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        reply = QMessageBox.question(self, "Confirm Delete", f"Are you sure you want to delete profile '{profile}'?\\nAll statistics will be permanently lost.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             self.db.delete_profile(profile)
             self.viewing_profile = "Default"
@@ -1369,7 +1391,7 @@ class TypeTraceUI(QMainWindow):
                 QMessageBox.warning(self, "Export", f"Export failed: {e}")
 
     def _reset_statistics_dialog(self):
-        reply = QMessageBox.question(self, "Reset Statistics", f"Are you sure you want to clear statistics for profile '{self.viewing_profile}'?\nThis action cannot be undone.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        reply = QMessageBox.question(self, "Reset Statistics", f"Are you sure you want to clear statistics for profile '{self.viewing_profile}'?\\nThis action cannot be undone.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             self.db.reset_profile_statistics(self.viewing_profile)
             self._update_heatmap_colors()
@@ -1482,7 +1504,10 @@ class TypeTraceUI(QMainWindow):
     def winfo_height(self):
         return self.height()
 
-class ProcessMappingDialog(QDialog):
+'''
+
+# ─── PART 6: ProcessMappingDialog and AboutDialog ───
+PART6 = '''class ProcessMappingDialog(QDialog):
     def __init__(self, parent, db):
         super().__init__(parent)
         self.db = db
@@ -1560,7 +1585,7 @@ class ProcessMappingDialog(QDialog):
         mappings = self.db.get_profile_mappings()
         for proc, prof in mappings.items():
             row = QHBoxLayout()
-            lbl = QLabel(f"{proc}  \u27a1  {prof}")
+            lbl = QLabel(f"{proc}  \\u27a1  {prof}")
             lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12px; font-family: Consolas; font-weight: bold; background: transparent;")
             row.addWidget(lbl)
             row.addStretch()
@@ -1587,11 +1612,11 @@ class ProcessMappingDialog(QDialog):
             lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; font-style: italic; background: transparent;")
             row.addWidget(lbl)
             row.addStretch()
-            g_btn = QPushButton("\u2192 Gaming")
+            g_btn = QPushButton("\\u2192 Gaming")
             g_btn.setFixedWidth(75)
             g_btn.clicked.connect(lambda checked, p=proc: self._quick_map(p, "Gaming"))
             row.addWidget(g_btn)
-            d_btn = QPushButton("\u2192 Desktop")
+            d_btn = QPushButton("\\u2192 Desktop")
             d_btn.setFixedWidth(75)
             d_btn.clicked.connect(lambda checked, p=proc: self._quick_map(p, "Desktop"))
             row.addWidget(d_btn)
@@ -1654,7 +1679,7 @@ class AboutDialog(QDialog):
         version.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; background: transparent;")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(version)
-        desc = QLabel("Privacy-focused keystroke analytics.\nAll data stored locally on your machine.")
+        desc = QLabel("Privacy-focused keystroke analytics.\\nAll data stored locally on your machine.")
         desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 13px; background: transparent;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(desc)
@@ -1662,12 +1687,30 @@ class AboutDialog(QDialog):
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"background-color: {BORDER_COLOR}; max-height: 1px;")
         layout.addWidget(sep)
-        github_btn = QPushButton("\u2605 GitHub Repository")
+        github_btn = QPushButton("\\u2605 GitHub Repository")
         github_btn.setStyleSheet(f"QPushButton {{ background: transparent; color: {ACCENT}; border: none; font-size: 13px; font-weight: bold; padding: 8px; }} QPushButton:hover {{ text-decoration: underline; color: {TEXT_PRIMARY}; }}")
         github_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         github_btn.clicked.connect(lambda: webbrowser.open(APP_GITHUB))
         layout.addWidget(github_btn)
-        footer = QLabel("Made with \u2328\ufe0f by TypeTrace")
+        footer = QLabel("Made with \\u2328\\ufe0f by TypeTrace")
         footer.setStyleSheet("color: #555555; font-size: 9px; background: transparent;")
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(footer)
+'''
+
+# ─── ASSEMBLE AND WRITE ───
+with open(TARGET, "w", encoding="utf-8") as f:
+    f.write(PART1)
+    f.write(KEYBOARD_LAYOUT_STR)
+    f.write(PART2)
+    f.write(PART3)
+    f.write(PART4)
+    f.write(PART5)
+    f.write(PART6)
+
+print(f"Successfully wrote {TARGET}")
+
+# Count lines
+with open(TARGET, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+print(f"Total lines: {len(lines)}")
