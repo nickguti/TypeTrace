@@ -9,18 +9,23 @@ from dataclasses import dataclass, replace
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QCheckBox, QStackedWidget,
-    QTabBar, QButtonGroup, QRadioButton, QDialog, QLineEdit,
+    QTabWidget, QTabBar, QButtonGroup, QRadioButton, QDialog, QLineEdit,
     QColorDialog, QGraphicsOpacityEffect, QMessageBox, QFileDialog, QScrollArea, QFrame, QGridLayout, QSizePolicy, QScrollBar
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QTime, QRectF, QPointF, pyqtSignal, pyqtSlot, QAbstractAnimation,
-    QPropertyAnimation, QMetaObject, Q_ARG, QEasingCurve, QRect
+    QPropertyAnimation, QMetaObject, Q_ARG, QEasingCurve, QRect, QSize, pyqtProperty,
+    QSequentialAnimationGroup
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QFont, QPen, QBrush, QPainterPath,
     QLinearGradient, QRadialGradient, QCursor, QFontDatabase
 )
 import utils
+
+class NoScrollComboBox(QComboBox):
+    def wheelEvent(self, event):
+        event.ignore()
 
 APP_VERSION = "2.1.0"
 APP_GITHUB = "https://github.com/nicolas/typetrace"
@@ -32,6 +37,7 @@ class ThemeTokens:
     bg_window: str
     bg_panel: str
     bg_input: str
+    bg_hover: str
     border: str
     accent: str
     text_primary: str
@@ -43,7 +49,7 @@ class ThemeTokens:
     status_bar_bg: str
 
 DARK_TOKENS = ThemeTokens(
-    bg_window="#0B0C10", bg_panel="#171A23", bg_input="#171A23",
+    bg_window="#0B0C10", bg_panel="#171A23", bg_input="#171A23", bg_hover="#13151C",
     border="#2F313D", accent="#00F5D4",
     text_primary="#FFFFFF", text_secondary="#8E9297",
     key_cold="#1E2130", key_shadow="#000000",
@@ -52,12 +58,12 @@ DARK_TOKENS = ThemeTokens(
 )
 
 LIGHT_TOKENS = ThemeTokens(
-    bg_window="#EEF0F5", bg_panel="#F7F8FC", bg_input="#FFFFFF",
-    border="#C8CDD8", accent="#00F5D4",
-    text_primary="#1A1C23", text_secondary="#5A6278",
-    key_cold="#DDE0EA", key_shadow="#B0B5C3",
-    key_highlight="rgba(255,255,255,0.6)",
-    tab_pane_bg="#F0F2F8", status_bar_bg="#E4E7F0"
+    bg_window="#F0F2F7", bg_panel="#FFFFFF", bg_input="#F7F8FC", bg_hover="#E8EBF4",
+    border="#D1D5E0", accent="#00C4AA",
+    text_primary="#1C1E26", text_secondary="#6B7280",
+    key_cold="#E2E5EF", key_shadow="#C5C9D6",
+    key_highlight="rgba(255,255,255,0.9)",
+    tab_pane_bg="#FFFFFF", status_bar_bg="#E8EBF4"
 )
 
 def build_qss(tokens: ThemeTokens) -> str:
@@ -68,33 +74,6 @@ QMainWindow {{
 QWidget {{
     color: {tokens.text_primary};
     font-family: "{FONT_FAMILY}";
-}}
-QTabWidget::pane {{
-    border: 1px solid {tokens.border};
-    border-radius: 8px;
-    background: {tokens.tab_pane_bg};
-    margin-top: -1px;
-}}
-QTabWidget::tab-bar {{
-    alignment: left;
-}}
-QTabBar::tab {{
-    background: transparent;
-    color: {tokens.text_secondary};
-    padding: 10px 20px;
-    font-size: 14px;
-    font-weight: 500;
-    border-bottom: 2px solid transparent;
-}}
-QTabBar::tab:selected {{
-    color: {tokens.text_primary};
-    border-bottom: 2px solid {tokens.accent};
-}}
-QTabBar::tab:hover:!selected {{
-    color: {tokens.text_primary};
-}}
-QTabBar::tab:!selected {{
-    color: {tokens.text_secondary};
 }}
 QPushButton {{
     background-color: {tokens.bg_input};
@@ -427,7 +406,14 @@ class SettingsManager:
         "overlay_height": 80,
         "overlay_fields": ["apm", "wpm"],
         "welcome_shown": False,
-        "keyboard_theme": "Classic Heatmap"
+        "keyboard_theme": "Classic Heatmap",
+        "keyboard_style": "Mechanical",
+        "overlay_opacity": 1.0,
+        "overlay_scale": 1.0,
+        "overlay_show_apm": True,
+        "overlay_show_wpm": True,
+        "overlay_show_peak": False,
+        "overlay_show_profile": True
     }
 
     def __init__(self):
@@ -485,7 +471,7 @@ class HeaderWidget(QWidget):
         self.is_incognito = False
         self.bg_pulse_alpha = 0
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setContentsMargins(80, 0, 20, 0)
         title_layout = QVBoxLayout()
         title_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.title_lbl = QLabel(self.tr.t("app_title") if self.tr else "TYPETRACE")
@@ -517,40 +503,39 @@ class HeaderWidget(QWidget):
         layout.addLayout(stats_layout)
         layout.addSpacing(20)
         
-        self.gear_btn = QPushButton("\u2699")
-        self.gear_btn.setFixedSize(32, 32)
-        self.gear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.gear_btn.setToolTip("Settings")
-        layout.addWidget(self.gear_btn)
-        
         self.compact_btn = QPushButton("\u229f")
         self.compact_btn.setFixedSize(32, 32)
         self.compact_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.compact_btn.setToolTip(self.tr.t("compact_mode") if self.tr else "Compact Mode")
         layout.addWidget(self.compact_btn)
+        
+        self.settings_btn = QPushButton("⚙️")
+        self.settings_btn.setFixedSize(32, 32)
+        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.setToolTip("Impostazioni")
+        layout.addWidget(self.settings_btn)
 
     def set_tokens(self, tokens: ThemeTokens):
         self.tokens = tokens
-        self.title_lbl.setStyleSheet(f"color: {self.tokens.accent}; background: transparent;")
+        self.title_lbl.setStyleSheet(f"color: {self.tokens.text_primary}; background: transparent;")
         self.subtitle_lbl.setStyleSheet(f"color: {self.tokens.text_secondary}; background: transparent;")
-        self.apm_lbl.setStyleSheet(f"color: {self.tokens.text_primary}; background: transparent;")
-        self.wpm_lbl.setStyleSheet(f"color: {self.tokens.text_primary}; background: transparent;")
+        self.apm_lbl.setStyleSheet(f"color: {self.tokens.accent}; background: transparent;")
+        self.wpm_lbl.setStyleSheet(f"color: {self.tokens.accent}; background: transparent;")
         
         btn_qss = f"""
             QPushButton {{
                 background-color: transparent;
                 color: {self.tokens.text_secondary};
-                border: 1px solid {self.tokens.border};
-                border-radius: 4px;
-                font-size: 16px;
+                border: none;
+                border-radius: 6px;
             }}
             QPushButton:hover {{
+                background-color: {self.tokens.bg_panel};
                 color: {self.tokens.text_primary};
-                border: 1px solid {self.tokens.accent};
             }}
         """
-        self.gear_btn.setStyleSheet(btn_qss)
         self.compact_btn.setStyleSheet(btn_qss)
+        self.settings_btn.setStyleSheet(btn_qss)
         self._update_status_labels()
         self.update()
 
@@ -570,7 +555,11 @@ class HeaderWidget(QWidget):
             c = self.tokens.accent
             self.status_lbl.setText(self.tr.t("tracking_active") if self.tr else "Tracking")
         self.status_dot.setStyleSheet(f"color: {c}; background: transparent;")
-        self.status_lbl.setStyleSheet(f"color: {c}; background: transparent;")
+        
+        if self.is_incognito:
+            self.status_lbl.setStyleSheet(f"color: {c}; background: transparent;")
+        else:
+            self.status_lbl.setStyleSheet(f"color: {self.tokens.text_secondary}; background: transparent;")
 
     def on_anim_tick(self):
         self.bg_pulse_alpha += 0.05
@@ -580,15 +569,33 @@ class HeaderWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), hex_to_qcolor(self.tokens.bg_panel))
+        painter.fillRect(self.rect(), hex_to_qcolor(self.tokens.bg_window))
         if not self.is_incognito and self.is_tracking:
             pulse = (math.sin(self.bg_pulse_alpha) + 1) / 2
             alpha = int(10 + 15 * pulse)
             c = hex_to_qcolor(self.tokens.accent)
             c.setAlpha(alpha)
             painter.fillRect(self.rect(), c)
+            
         painter.setPen(QPen(hex_to_qcolor(self.tokens.border), 1.0))
         painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        
+        # Draw "TT" monogram
+        m_size = 40
+        mx = 20
+        my = (self.height() - m_size) // 2
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(mx, my, m_size, m_size), 8, 8)
+        painter.fillPath(path, hex_to_qcolor(self.tokens.accent))
+        painter.setPen(QPen(hex_to_qcolor("#0B0C10"), 1.0))
+        painter.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        painter.drawText(QRectF(mx, my, m_size, m_size), Qt.AlignmentFlag.AlignCenter, "TT")
+        
+        # Vertical Separator before stats
+        painter.setPen(QPen(hex_to_qcolor(self.tokens.border), 1.0))
+        sep_x = self.width() - 320
+        painter.drawLine(sep_x, 20, sep_x, self.height() - 20)
+        
         painter.end()
 
 
@@ -663,6 +670,7 @@ class LegendBarWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), hex_to_qcolor(self.tokens.bg_panel))
         ramp = KEYBOARD_THEMES.get(self.current_theme_name, KEYBOARD_THEMES["Classic Heatmap"])
         bar_w = 300
         bar_h = 10
@@ -731,23 +739,43 @@ class KeyboardHeatmapWidget(QWidget):
         w = self.width()
         h = self.height()
         if w <= 0 or h <= 0:
-            return QRectF(0, 0, 0, 0)
+            return QRectF(0, 0, 0, 0), 1.10, "100%"
+            
+        fmt = "100%"
+        if self.parent_ui:
+            f_val = self.parent_ui.settings_mgr.get("keyboard_layout")
+            if f_val:
+                fmt = f_val
+        if fmt == "100%":
+            ar = 4.4
+            max_rx = 1.10
+        elif fmt == "60%":
+            ar = 3.0
+            max_rx = 0.72
+        else:
+            ar = 3.6
+            max_rx = 0.88
+        
         current_ratio = w / h
-        if current_ratio > self.ASPECT_RATIO:
+        if current_ratio > ar:
             draw_h = h
-            draw_w = draw_h * self.ASPECT_RATIO
+            draw_w = draw_h * ar
             offset_x = (w - draw_w) / 2.0
             offset_y = 0.0
         else:
             draw_w = w
-            draw_h = draw_w / self.ASPECT_RATIO
+            draw_h = draw_w / ar
             offset_x = 0.0
             offset_y = (h - draw_h) / 2.0
-        return QRectF(offset_x, offset_y, draw_w, draw_h)
+        return QRectF(offset_x, offset_y, draw_w, draw_h), max_rx, fmt
 
     def update_colors(self, color_map):
         self.target_colors = color_map
-        self.transition_start = QTime.currentTime()
+        if not color_map:
+            self.current_colors = {}
+            self.transition_start = None
+        else:
+            self.transition_start = QTime.currentTime()
 
     def add_ripple(self, key_id):
         self.ripples.append({"key_id": key_id, "start_time": QTime.currentTime(), "duration_ms": 300})
@@ -770,16 +798,23 @@ class KeyboardHeatmapWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), hex_to_qcolor(self.tokens.bg_panel))
-        draw_rect = self._compute_draw_rect()
+        
+        bg_color = hex_to_qcolor(self.tokens.bg_window)
+        painter.fillRect(self.rect(), bg_color)
+        
+        draw_rect, max_rx, fmt = self._compute_draw_rect()
         if draw_rect.width() < 50 or draw_rect.height() < 20:
             painter.end()
             return
+            
         font_size = max(7, int(draw_rect.height() / 25))
         font = QFont(FONT_FAMILY, font_size)
         font.setBold(True)
         painter.setFont(font)
-        border_pen = QPen(hex_to_qcolor(self.tokens.border), 1.0)
+        
+        draw_border = bg_color.lightness() > 128
+        border_pen = QPen(hex_to_qcolor(self.tokens.border), 0.5) if draw_border else Qt.PenStyle.NoPen
+        
         accent_c = hex_to_qcolor(self.tokens.accent)
         hover_pen = QPen(accent_c, 2.0)
         now = QTime.currentTime()
@@ -800,15 +835,23 @@ class KeyboardHeatmapWidget(QWidget):
             self.transition_start = None
             
         shadow_c = hex_to_qcolor(self.tokens.key_shadow)
-        shadow_c.setAlpha(80 if self.tokens.key_shadow == "#B0B5C3" else 153)
+        shadow_c.setAlpha(80 if draw_border else 153)
         hl_parts = self.tokens.key_highlight.strip("rgba()").split(",")
         hl_c = QColor(int(hl_parts[0]), int(hl_parts[1]), int(hl_parts[2]), int(float(hl_parts[3]) * 255))
         
+        kb_style = "Mechanical"
+        if self.parent_ui and hasattr(self.parent_ui, "settings_mgr"):
+            kb_style = self.parent_ui.settings_mgr.get("keyboard_style")
+            
         for key in KEYBOARD_LAYOUT:
+            if fmt == "TKL" and key["rx"] > 0.86:
+                continue
+            if fmt == "60%" and (key["ry"] < 0.1 or key["rx"] > 0.71):
+                continue
             key_id = key["id"]
-            px = draw_rect.x() + key["rx"] * draw_rect.width()
+            px = draw_rect.x() + (key["rx"] / max_rx) * draw_rect.width()
             py = draw_rect.y() + key["ry"] * draw_rect.height()
-            pw = key["rw"] * draw_rect.width()
+            pw = (key["rw"] / max_rx) * draw_rect.width()
             ph = key["rh"] * draw_rect.height()
             key_rect = QRectF(px + 1.5, py + 1.5, pw - 3, ph - 3)
             radius = ph * 0.15
@@ -825,27 +868,67 @@ class KeyboardHeatmapWidget(QWidget):
                     hc = hex_to_qcolor(self.tokens.border)
                     fill_color = interpolate_color(base_color, hc, 0.3)
                     
-            shadow_rect = QRectF(key_rect.x(), key_rect.y() + ph * 0.08, key_rect.width(), key_rect.height())
-            painter.setBrush(QBrush(shadow_c))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(shadow_rect, radius, radius)
-            painter.setBrush(QBrush(fill_color))
-            if key_id == self._hovered_key_id:
-                painter.setPen(hover_pen)
+            if kb_style == "Neon Cyberpunk":
+                glow_rect = key_rect.adjusted(-2, -2, 2, 2)
+                glow_color = QColor(fill_color)
+                glow_color.setAlpha(25)
+                painter.setBrush(QBrush(glow_color))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(glow_rect, radius, radius)
+                
+                base_c = QColor(fill_color)
+                base_c.setAlpha(38)
+                painter.setBrush(QBrush(base_c))
+                border_color = hover_pen if key_id == self._hovered_key_id else QPen(fill_color, 1.5)
+                painter.setPen(border_color)
+                painter.drawRoundedRect(key_rect, radius, radius)
+            elif kb_style == "Pudding Keycaps":
+                shadow_rect = QRectF(key_rect.x(), key_rect.y() + ph * 0.08, key_rect.width(), key_rect.height())
+                pudding_base = QColor(fill_color)
+                pudding_base.setAlpha(int(255 * 0.90))
+                painter.setBrush(QBrush(pudding_base))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(shadow_rect, radius, radius)
+                
+                top_color = QColor("#1E2130")
+                painter.setBrush(QBrush(top_color))
+                if key_id == self._hovered_key_id:
+                    painter.setPen(hover_pen)
+                else:
+                    painter.setPen(border_pen)
+                painter.drawRoundedRect(key_rect, radius, radius)
             else:
-                painter.setPen(border_pen)
-            painter.drawRoundedRect(key_rect, radius, radius)
-            hl_rect = QRectF(key_rect.x() + 1, key_rect.y() + 1, key_rect.width() - 2, ph * 0.25)
-            painter.setBrush(QBrush(hl_c))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(hl_rect, radius - 1, radius - 1)
+                shadow_rect = QRectF(key_rect.x(), key_rect.y() + ph * 0.08, key_rect.width(), key_rect.height())
+                painter.setBrush(QBrush(shadow_c))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(shadow_rect, radius, radius)
+                
+                painter.setBrush(QBrush(fill_color))
+                if key_id == self._hovered_key_id:
+                    painter.setPen(hover_pen)
+                else:
+                    painter.setPen(border_pen)
+                painter.drawRoundedRect(key_rect, radius, radius)
+                
+                hl_rect = QRectF(key_rect.x() + 1, key_rect.y() + 1, key_rect.width() - 2, ph * 0.25)
+                painter.setBrush(QBrush(hl_c))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(hl_rect, radius - 1, radius - 1)
             
-            if self.heatmap_enabled and key_id in self.current_colors:
-                c = self.current_colors[key_id]
-                lum = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
-                text_color = QColor("#171A23" if lum > 128 else "#E8EAF0")
+            if kb_style == "Neon Cyberpunk":
+                if self.heatmap_enabled and key_id in self.current_colors:
+                    text_color = QColor(fill_color)
+                    text_color.setAlpha(255)
+                else:
+                    text_color = hex_to_qcolor(self.tokens.text_primary)
             else:
-                text_color = hex_to_qcolor(self.tokens.text_secondary)
+                if self.heatmap_enabled and key_id in self.current_colors:
+                    c = self.current_colors[key_id]
+                    lum = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+                    text_color = QColor("#171A23" if lum > 128 else "#E8EAF0")
+                else:
+                    text_color = hex_to_qcolor(self.tokens.text_primary)
+                    
             if key_id in active_ripples:
                 text_color = hex_to_qcolor(self.tokens.text_primary)
             painter.setPen(text_color)
@@ -900,45 +983,72 @@ class KeyboardHeatmapWidget(QWidget):
         painter.end()
 
     def mouseMoveEvent(self, event):
+        if not self.parent_ui or not getattr(self.parent_ui, "db", None):
+            super().mouseMoveEvent(event)
+            return
+
         pos = event.position()
-        draw_rect = self._compute_draw_rect()
+        draw_rect, max_rx, fmt = self._compute_draw_rect()
         found_key = None
+        
         for key in KEYBOARD_LAYOUT:
-            px = draw_rect.x() + key["rx"] * draw_rect.width()
+            if fmt == "TKL" and key["rx"] > 0.86:
+                continue
+            px = draw_rect.x() + (key["rx"] / max_rx) * draw_rect.width()
             py = draw_rect.y() + key["ry"] * draw_rect.height()
-            pw = key["rw"] * draw_rect.width()
+            pw = (key["rw"] / max_rx) * draw_rect.width()
             ph = key["rh"] * draw_rect.height()
             key_rect = QRectF(px, py, pw, ph)
             if key_rect.contains(pos):
                 found_key = key
                 break
+                
         if found_key:
             key_id = found_key["id"]
             if self._hovered_key_id != key_id:
                 self._hovered_key_id = key_id
-            count = self.key_stats.get(key_id, 0)
-            total = sum(self.key_stats.values())
-            sorted_keys = sorted(self.key_stats.items(), key=lambda x: x[1], reverse=True)
-            rank_idx = -1
-            for i, (k, c) in enumerate(sorted_keys):
-                if k == key_id:
-                    rank_idx = i + 1
-                    break
-            self.tooltip.update_info(found_key["label"], count, total, rank_idx)
+                
+                profile = getattr(self.parent_ui, "current_profile", "Default")
+                if not profile:
+                    profile = "Default"
+                
+                key_data = self.parent_ui.db.get_key_stats(profile, key_id)
+                count = key_data.get("total", 0)
+                
+                agg_stats = self.parent_ui.db.get_aggregated_stats(profile)
+                all_keys = agg_stats.get("keys", {})
+                
+                total_all_presses = sum(all_keys.values())
+                
+                if count <= 0:
+                    rank_idx = -1
+                else:
+                    sorted_keys = sorted(all_keys.items(), key=lambda x: x[1], reverse=True)
+                    rank_idx = -1
+                    for i, (k, c) in enumerate(sorted_keys):
+                        if k == key_id:
+                            rank_idx = i + 1
+                            break
+                            
+                self.tooltip.update_info(found_key["label"], count, total_all_presses, rank_idx)
+                
             cursor_pos = event.globalPosition().toPoint()
-            tt_x = cursor_pos.x() + 12
-            tt_y = cursor_pos.y() + 12
-            screen_geo = QApplication.primaryScreen().geometry()
+            tt_x = cursor_pos.x() + 15
+            tt_y = cursor_pos.y() + 15
+            
+            screen_geo = QApplication.primaryScreen().availableGeometry()
             if tt_x + self.tooltip.width() > screen_geo.right():
-                tt_x = cursor_pos.x() - self.tooltip.width() - 12
+                tt_x = cursor_pos.x() - self.tooltip.width() - 15
             if tt_y + self.tooltip.height() > screen_geo.bottom():
-                tt_y = cursor_pos.y() - self.tooltip.height() - 12
+                tt_y = cursor_pos.y() - self.tooltip.height() - 15
+                
             self.tooltip.move(tt_x, tt_y)
             self.tooltip.show()
         else:
             if self._hovered_key_id is not None:
                 self._hovered_key_id = None
             self.tooltip.hide()
+            
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
@@ -1032,16 +1142,142 @@ class MiniCard(QFrame):
 
     def set_tokens(self, tokens: ThemeTokens):
         self.tokens = tokens
+        self.setStyleSheet(f"""
+            MiniCard {{
+                background-color: {tokens.bg_panel};
+                border: 1px solid {tokens.border};
+                border-radius: 10px;
+            }}
+        """)
         self.update()
+
+
+class ModernSwitch(QCheckBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tokens = DARK_TOKENS
+        self._thumb_pos = 0.0
+        self._anim = QPropertyAnimation(self, b"thumb_pos")
+        self._anim.setDuration(150)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self.stateChanged.connect(self._on_state_change)
+
+    def set_tokens(self, tokens: ThemeTokens):
+        self.tokens = tokens
+        self.update()
+
+    @pyqtProperty(float)
+    def thumb_pos(self):
+        return self._thumb_pos
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
+    @thumb_pos.setter
+    def thumb_pos(self, pos):
+        self._thumb_pos = pos
+        self.update()
+
+    def _on_state_change(self, state):
+        self._anim.stop()
+        self._anim.setEndValue(1.0 if self.isChecked() else 0.0)
+        self._anim.start()
+
+    def sizeHint(self):
+        return QSize(44, 24)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()), 12, 12)
-        painter.fillPath(path, hex_to_qcolor(self.tokens.bg_input))
-        painter.setPen(QPen(hex_to_qcolor(self.tokens.border), 1.0))
-        painter.drawPath(path)
+        
+        w = 40
+        h = 22
+        y = (self.height() - h) // 2
+        
+        bg_color = hex_to_qcolor(self.tokens.accent) if self.isChecked() else hex_to_qcolor(self.tokens.border)
+        
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(bg_color))
+        painter.drawRoundedRect(QRectF(0, y, w, h), h/2, h/2)
+        
+        thumb_r = h - 4
+        thumb_x = 2 + self._thumb_pos * (w - thumb_r - 4)
+        thumb_y = y + 2
+        
+        painter.setBrush(QBrush(Qt.GlobalColor.white))
+        painter.drawEllipse(QRectF(thumb_x, thumb_y, thumb_r, thumb_r))
+        painter.end()
+
+
+class TelemetryProgressListWidget(QWidget):
+    def __init__(self, parent=None, tr=None):
+        super().__init__(parent)
+        self.data = []
+        self.tokens = DARK_TOKENS
+        self._tr = tr
+        self.setMinimumHeight(150)
+        
+    def set_tokens(self, tokens: ThemeTokens):
+        self.tokens = tokens
+        self.update()
+        
+    def set_data(self, data):
+        self.data = data
+        self.update()
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        
+        if not self.data:
+            painter.setFont(QFont(FONT_FAMILY, 12))
+            painter.setPen(hex_to_qcolor(self.tokens.text_secondary))
+            no_data = self._tr.t("no_data") if self._tr else "No data available."
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, no_data)
+            painter.end()
+            return
+            
+        w = self.width()
+        h = self.height()
+        padding_x = 10
+        padding_y = 10
+        item_h = (h - 2 * padding_y) / max(5, len(self.data))
+        
+        max_val = max([count for label, count in self.data]) if self.data else 1
+        
+        bg_bar_c = hex_to_qcolor(self.tokens.border)
+        accent_c = hex_to_qcolor(self.tokens.accent)
+        text_primary = hex_to_qcolor(self.tokens.text_primary)
+        text_sec = hex_to_qcolor(self.tokens.text_secondary)
+        
+        font_label = QFont(FONT_FAMILY, 11, QFont.Weight.Medium)
+        font_count = QFont(FONT_FAMILY, 10)
+        
+        for i, (label, count) in enumerate(self.data):
+            y = padding_y + i * item_h
+            painter.setFont(font_label)
+            painter.setPen(text_primary)
+            painter.drawText(QRectF(padding_x, y, w * 0.3, item_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, str(label))
+            
+            painter.setFont(font_count)
+            painter.setPen(text_sec)
+            painter.drawText(QRectF(w - padding_x - 50, y, 50, item_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, str(count))
+            
+            bar_x = padding_x + w * 0.35
+            bar_w = w - bar_x - padding_x - 60
+            bar_y = y + item_h / 2 - 4
+            
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(bg_bar_c))
+            painter.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, 8), 4, 4)
+            
+            fill_w = (count / max_val) * bar_w if max_val > 0 else 0
+            if fill_w > 0:
+                painter.setBrush(QBrush(accent_c))
+                painter.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, 8), 4, 4)
+                
         painter.end()
 
 
@@ -1627,223 +1863,66 @@ class AboutDialog(QDialog):
         self.github_btn.setStyleSheet(f"QPushButton {{ background: transparent; color: {self.tokens.accent}; border: none; font-size: 13px; font-weight: bold; padding: 8px; }} QPushButton:hover {{ color: {self.tokens.text_primary}; }}")
         self.footer.setStyleSheet(f"color: {self.tokens.text_secondary}; font-size: 9px; background: transparent;")
 
-class SettingsDrawer(QWidget):
-    def __init__(self, parent, tr=None, ui_parent=None):
-        super().__init__(parent)
-        self.tr = tr
-        self.ui_parent = ui_parent
-        self.tokens = DARK_TOKENS
-        self.setFixedWidth(320)
-        self.hide()
-        
-        self.is_open = False
-        self.anim = QPropertyAnimation(self, b"geometry")
-        self.anim.finished.connect(self._on_anim_finished)
-        
-        self.content_layout = QVBoxLayout(self)
-        self.content_layout.setContentsMargins(0, 0, 0, 0)
-        self.content_layout.setSpacing(0)
-        
-        self.header_widget = QWidget()
-        self.header_widget.setFixedHeight(48)
-        self.content_layout.addWidget(self.header_widget)
-        
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setStyleSheet("background: transparent;")
-        
-        self.scroll_content = QWidget()
-        self.scroll_layout = QVBoxLayout(self.scroll_content)
-        self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.scroll_layout.setSpacing(16)
-        self.scroll_layout.setContentsMargins(20, 20, 20, 20)
-        self.scroll.setWidget(self.scroll_content)
-        
-        self.content_layout.addWidget(self.scroll)
-        
-        self.close_rect = QRect(280, 14, 20, 20)
-        
-        self._build_sections()
 
-    def set_tokens(self, tokens: ThemeTokens):
-        self.tokens = tokens
-        self.update()
-
-    def _build_sections(self):
-        def _section_header(text):
-            lbl = QLabel("  ".join(text.upper()))
-            lbl.setFixedHeight(24)
-            lbl.setStyleSheet(f"color: {self.tokens.text_secondary}; font-size: 11px; border-bottom: 1px solid {self.tokens.border}; margin-bottom: 8px;")
-            return lbl
-
-        def _row(label_text, control):
-            row = QWidget()
-            row.setMinimumHeight(36)
-            lo = QHBoxLayout(row)
-            lo.setContentsMargins(0, 0, 0, 0)
-            lo.setSpacing(10)
-            lbl = QLabel(label_text)
-            lbl.setStyleSheet(f"color: {self.tokens.text_primary}; font-size: 13px;")
-            lo.addWidget(lbl)
-            lo.addStretch()
-            lo.addWidget(control)
-            return row
-
-        self.scroll_layout.addWidget(_section_header(self.tr.t("appearance") if self.tr else "Appearance"))
-        
-        theme_row = QWidget()
-        theme_lo = QHBoxLayout(theme_row)
-        theme_lo.setContentsMargins(0,0,0,0)
-        self.dark_chip = QPushButton("\u263e Dark")
-        self.dark_chip.setCheckable(True)
-        self.dark_chip.clicked.connect(lambda: self.ui_parent._set_theme_mode("dark"))
-        self.light_chip = QPushButton("\u2600 Light")
-        self.light_chip.setCheckable(True)
-        self.light_chip.clicked.connect(lambda: self.ui_parent._set_theme_mode("light"))
-        theme_lo.addWidget(self.dark_chip)
-        theme_lo.addWidget(self.light_chip)
-        self.scroll_layout.addWidget(_row(self.tr.t("theme") if self.tr else "Theme", theme_row))
-        
-        self.accent_btn = QPushButton()
-        self.accent_btn.setFixedSize(100, 28)
-        self.accent_btn.clicked.connect(self.ui_parent._pick_accent_color)
-        self.scroll_layout.addWidget(_row(self.tr.t("accent_color") if self.tr else "Accent Color", self.accent_btn))
-        
-        self.kbd_theme_combo = QComboBox()
-        self.kbd_theme_combo.addItems(list(KEYBOARD_THEMES.keys()))
-        self.kbd_theme_combo.currentTextChanged.connect(self.ui_parent._change_keyboard_theme)
-        self.scroll_layout.addWidget(_row(self.tr.t("keyboard_theme") if self.tr else "Keyboard Theme", self.kbd_theme_combo))
-        
-        self.scroll_layout.addWidget(_section_header(self.tr.t("interface") if self.tr else "Interface"))
-        
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["English", "Italiano"])
-        self.lang_combo.currentIndexChanged.connect(self.ui_parent._change_language)
-        self.scroll_layout.addWidget(_row(self.tr.t("language") if self.tr else "Language", self.lang_combo))
-        
-        self.lang_notice = QLabel("")
-        self.lang_notice.setStyleSheet(f"color: {self.tokens.text_secondary}; font-size: 11px;")
-        self.lang_notice.setVisible(False)
-        self.scroll_layout.addWidget(self.lang_notice)
-        
-        self.compact_check = QCheckBox()
-        self.compact_check.stateChanged.connect(self.ui_parent._toggle_compact_check)
-        self.scroll_layout.addWidget(_row(self.tr.t("compact_mode") if self.tr else "Compact Mode", self.compact_check))
-        
-        self.startup_check = QCheckBox()
-        self.startup_check.setChecked(utils.is_startup_enabled())
-        self.startup_check.stateChanged.connect(self.ui_parent._toggle_startup)
-        self.scroll_layout.addWidget(_row(self.tr.t("boot_startup") if self.tr else "Boot Startup", self.startup_check))
-        
-        self.scroll_layout.addWidget(_section_header(self.tr.t("tracking") if self.tr else "Tracking"))
-        
-        self.auto_btn = QPushButton(self.tr.t("auto_switch") if self.tr else "Auto-Switch")
-        self.auto_btn.clicked.connect(self.ui_parent._open_mappings_dialog)
-        self.scroll_layout.addWidget(_row("Smart Mapping", self.auto_btn))
-        
-        self.heatmap_check = QCheckBox()
-        self.heatmap_check.stateChanged.connect(self.ui_parent._toggle_heatmap)
-        self.scroll_layout.addWidget(_row(self.tr.t("heatmap_view") if self.tr else "Heatmap View", self.heatmap_check))
-        
-        self.overlay_check = QCheckBox()
-        self.overlay_check.stateChanged.connect(self.ui_parent._toggle_overlay_check)
-        self.scroll_layout.addWidget(_row(self.tr.t("floating_widget") if self.tr else "Floating Widget", self.overlay_check))
-        
-        self.scroll_layout.addWidget(_section_header(self.tr.t("data") if self.tr else "Data"))
-        
-        self.export_btn = QPushButton("\u21e7 " + (self.tr.t("export") if self.tr else "Export"))
-        self.export_btn.setFixedHeight(36)
-        self.export_btn.clicked.connect(self.ui_parent._open_export_dialog)
-        self.scroll_layout.addWidget(self.export_btn)
-        
-        self.reset_btn = QPushButton("\u26a0 " + (self.tr.t("reset") if self.tr else "Reset"))
-        self.reset_btn.setFixedHeight(36)
-        self.reset_btn.setStyleSheet("background: transparent; color: #E05C5C; border: 1px solid #E05C5C;")
-        self.reset_btn.clicked.connect(self.ui_parent._reset_statistics_dialog)
-        self.scroll_layout.addWidget(self.reset_btn)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), hex_to_qcolor(self.tokens.bg_panel))
-        
-        painter.setPen(QPen(hex_to_qcolor(self.tokens.accent), 2.0))
-        painter.drawLine(0, 0, 0, self.height())
-        
-        painter.fillRect(0, 0, self.width(), 48, hex_to_qcolor(self.tokens.bg_window))
-        
-        painter.setPen(hex_to_qcolor(self.tokens.text_primary))
-        painter.setFont(QFont(FONT_FAMILY, 15, QFont.Weight.Bold))
-        painter.drawText(QRectF(20, 0, self.width()-40, 48), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Settings")
-        
-        painter.setPen(QPen(hex_to_qcolor(self.tokens.text_secondary), 2.0))
-        painter.drawLine(285, 19, 295, 29)
-        painter.drawLine(295, 19, 285, 29)
-        
-        painter.setPen(QPen(hex_to_qcolor(self.tokens.border), 1.0))
-        painter.drawLine(0, 48, self.width(), 48)
-        
-        painter.end()
-
-    def mousePressEvent(self, event):
-        if self.close_rect.contains(event.pos()):
-            self.toggle()
-        else:
-            super().mousePressEvent(event)
-
-    def toggle(self):
-        parent_w = self.parentWidget().width()
-        parent_h = self.parentWidget().height()
-        self.anim.stop()
-        if self.is_open:
-            self.anim.setDuration(180)
-            self.anim.setStartValue(QRect(parent_w - 320, 0, 320, parent_h))
-            self.anim.setEndValue(QRect(parent_w, 0, 320, parent_h))
-            self.anim.setEasingCurve(QEasingCurve.Type.InCubic)
-            self.is_open = False
-        else:
-            self.setGeometry(parent_w, 0, 320, parent_h)
-            self.show()
-            self.raise_()
-            self.anim.setDuration(220)
-            self.anim.setStartValue(QRect(parent_w, 0, 320, parent_h))
-            self.anim.setEndValue(QRect(parent_w - 320, 0, 320, parent_h))
-            self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            self.is_open = True
-        self.anim.start()
-
-    def _on_anim_finished(self):
-        if not self.is_open:
-            self.hide()
 
 
 class TypeTraceUI(QMainWindow):
-    _trigger_profile_switch = pyqtSignal(str, str)
-    _trigger_incognito = pyqtSignal(bool)
-
     def __init__(self, db, tracker, shutdown_callback=None):
-        self._qt_app = QApplication.instance()
-        if self._qt_app is None:
-            self._qt_app = QApplication(sys.argv)
+        if not QApplication.instance():
+            import sys
+            self._app = QApplication(sys.argv)
+        else:
+            self._app = QApplication.instance()
+            
         super().__init__()
         self.db = db
         self.tracker = tracker
         self.shutdown_callback = shutdown_callback
-        self.overlay = None
-        self.heatmap_enabled = False
-        self.viewing_profile = self.tracker.active_profile
-        self.incognito_active = False
-        self.settings = SettingsManager()
+        self._force_quit = False
+        self.settings_mgr = SettingsManager()
+        self.tr = Translator(self.settings_mgr.get("language"))
         
-        self.current_tokens = DARK_TOKENS if self.settings.get("theme") == "dark" else LIGHT_TOKENS
-        self.current_tokens = replace(self.current_tokens, accent=self.settings.get("accent_color"))
+        theme_str = self.settings_mgr.get("theme")
+        self.is_dark_mode = (theme_str == "dark")
+        self.current_tokens = replace(DARK_TOKENS if self.is_dark_mode else LIGHT_TOKENS)
+        self.current_tokens.accent = self.settings_mgr.get("accent_color")
         
-        self.tr = Translator(self.settings.get("language"))
+        self.is_compact = self.settings_mgr.get("compact_mode")
+        self.current_profile = "Total"
         
-        self.setWindowTitle("TypeTrace \u2014 Keystroke Analytics")
-        self.resize(1500, 820)
-        self.setMinimumSize(900, 500)
+        self.event_queue = queue.Queue()
+        self.tracker.ui_update_callback = self._on_tracker_event
+        
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._process_queue)
+        self.timer.start(16)
+        
+        self.anim_timer = QTimer()
+        self.anim_timer.timeout.connect(self._on_anim_tick)
+        self.anim_timer.start(30)
+        
+        self.telemetry_cards = []
+        
+        self._init_ui()
+        self._apply_theme(self.current_tokens)
+        
+        if not self.settings_mgr.get("welcome_shown"):
+            QTimer.singleShot(500, self._show_welcome)
+
+    def _show_welcome(self):
+        dlg = WelcomeDialog(self, self.tr, self.current_tokens)
+        dlg.exec()
+        pname = dlg.get_profile_name()
+        if pname not in self.db.get_profiles() and pname != "Total":
+            self.db.add_profile(pname)
+            self.profile_combo.addItem(pname)
+            self.profile_combo.setCurrentText(pname)
+        self.settings_mgr.set("welcome_shown", True)
+
+    def _init_ui(self):
+        self.setWindowTitle("TypeTrace")
+        self.resize(900, 600)
+        self.setMinimumSize(800, 500)
         
         central = QWidget()
         self.setCentralWidget(central)
@@ -1851,748 +1930,910 @@ class TypeTraceUI(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        self.header = HeaderWidget(tr=self.tr)
-        self.header.gear_btn.clicked.connect(self._toggle_drawer)
-        self.header.compact_btn.clicked.connect(self._toggle_compact)
+        self.header = HeaderWidget(self, self.tr)
+        self.header.compact_btn.clicked.connect(self.toggle_compact_mode)
         main_layout.addWidget(self.header)
         
-        body_layout = QVBoxLayout()
-        body_layout.setContentsMargins(20, 10, 20, 10)
-        body_layout.setSpacing(10)
+        self.tab_widget = QTabWidget()
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        main_layout.addWidget(self.tab_widget)
         
-        self.keyboard_widget = KeyboardHeatmapWidget()
-        self.keyboard_widget.parent_ui = self
-        self.heatmap_legend = LegendBarWidget(tr=self.tr)
-        self.heatmap_legend.setVisible(False)
+        self.tab_home = QWidget()
+        home_layout = QVBoxLayout(self.tab_home)
+        home_layout.setContentsMargins(20, 20, 20, 20)
+        home_layout.setSpacing(15)
         
-        kbd_container = QVBoxLayout()
-        kbd_container.setSpacing(10)
-        kbd_container.addWidget(self.keyboard_widget)
-        kbd_container.addWidget(self.heatmap_legend)
-        body_layout.addLayout(kbd_container, 3)
+        dash_layout = QHBoxLayout()
+        self.main_stats_lbl = QLabel("APM: 0 | Parole: 0")
+        self.main_stats_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        dash_layout.addWidget(self.main_stats_lbl)
+        dash_layout.addStretch()
+        dash_layout.addWidget(QLabel("Mostra Heatmap"))
+        self.heatmap_toggle = ModernSwitch()
+        self.heatmap_toggle.toggled.connect(self._on_heatmap_toggle)
+        dash_layout.addWidget(self.heatmap_toggle)
         
-        self.tab_bar = QTabBar()
-        self.tab_bar.addTab(self.tr.t("tab_config") if self.tr else "Configuration")
-        self.tab_bar.addTab(self.tr.t("tab_telemetry") if self.tr else "Telemetry")
-        self.tab_bar.addTab(self.tr.t("tab_chart") if self.tr else "Chart")
-        self.tab_bar.currentChanged.connect(self._on_tab_changed)
+        home_layout.addLayout(dash_layout)
+        self.header.settings_btn.clicked.connect(self._toggle_settings_drawer)
         
-        self.stacked_widget = QStackedWidget()
-        self.stacked_widget.addWidget(self._build_config_tab())
-        self.stacked_widget.addWidget(self._build_telemetry_tab())
-        self.stacked_widget.addWidget(self._build_chart_tab())
+        self.heatmap_container = QWidget()
+        hc_layout = QVBoxLayout(self.heatmap_container)
+        hc_layout.setContentsMargins(0, 0, 0, 0)
+        hc_layout.setSpacing(15)
         
-        self.tab_container = QWidget()
-        tab_layout = QVBoxLayout(self.tab_container)
-        tab_layout.setSpacing(0)
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.addWidget(self.tab_bar)
-        tab_layout.addWidget(self.stacked_widget)
-        body_layout.addWidget(self.tab_container, 1)
+        self.heatmap = KeyboardHeatmapWidget(self)
+        self.heatmap.parent_ui = self
+        self.heatmap.set_theme(self.settings_mgr.get("keyboard_theme"))
+        hc_layout.addWidget(self.heatmap, stretch=1)
+        self.legend = LegendBarWidget(self, self.tr)
+        self.legend.set_theme(self.settings_mgr.get("keyboard_theme"))
+        hc_layout.addWidget(self.legend)
+        self.heatmap_toggle.setChecked(True)
         
-        main_layout.addLayout(body_layout)
+        home_layout.addWidget(self.heatmap_container, stretch=1)
         
-        self.incognito_overlay = IncognitoOverlay(central)
-        self.incognito_overlay.hide()
+        self.tab_widget.addTab(self.tab_home, self.tr.t("tab_keyboard"))
         
-        self.settings_drawer = SettingsDrawer(central, tr=self.tr, ui_parent=self)
+        self.tab_telemetry = QScrollArea()
+        self.tab_telemetry.setWidgetResizable(True)
+        self.tab_telemetry.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        tel_container = QWidget()
+        tel_layout = QVBoxLayout(tel_container)
+        tel_layout.setContentsMargins(20, 20, 20, 20)
+        tel_layout.setSpacing(20)
         
-        self.anim_timer = QTimer(self)
-        self.anim_timer.setInterval(16)
-        self.anim_timer.timeout.connect(self._on_anim_tick)
-        self.anim_timer.start()
+        cards_layout = QHBoxLayout()
+        cards_layout.setSpacing(20)
         
-        self._update_timer = QTimer(self)
-        self._update_timer.timeout.connect(self._on_background_tick)
-        self._update_timer.start(1000)
+        self.telemetry_labels = []
+        self.telemetry_sub_labels = []
         
-        self._event_queue = None
-        self._queue_timer = QTimer(self)
-        self._queue_timer.timeout.connect(self._poll_event_queue)
-        self._queue_timer.start(50)
+        self.session_card = MiniCard()
+        sc_layout = QVBoxLayout(self.session_card)
+        sc_lbl = QLabel(self.tr.t("telemetry_session") if self.tr else "Estimated Words")
+        sc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        sc_sub = QLabel("Totale parole stimate (tasti / 5)")
+        sc_sub.setFont(QFont(FONT_FAMILY, 10))
+        sc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
+        self.telemetry_sub_labels.append(sc_sub)
+        self.session_val = QLabel("0")
+        self.session_val.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
+        sc_layout.addWidget(sc_lbl)
+        sc_layout.addWidget(sc_sub)
+        sc_layout.addSpacing(10)
+        sc_layout.addWidget(self.session_val)
+        sc_layout.addStretch()
+        cards_layout.addWidget(self.session_card)
         
-        self._save_timer = QTimer(self)
-        self._save_timer.timeout.connect(self._save_data)
-        self._save_timer.start(5000)
+        self.peak_card = MiniCard()
+        pc_layout = QVBoxLayout(self.peak_card)
+        pc_lbl = QLabel("Fastest Burst")
+        pc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        pc_sub = QLabel("Record APM (tracciato nel database)")
+        pc_sub.setFont(QFont(FONT_FAMILY, 10))
+        pc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
+        self.telemetry_sub_labels.append(pc_sub)
+        self.peak_val = QLabel("0 APM (0s)")
+        self.peak_val.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
+        pc_layout.addWidget(pc_lbl)
+        pc_layout.addWidget(pc_sub)
+        pc_layout.addSpacing(10)
+        pc_layout.addWidget(self.peak_val)
+        pc_layout.addStretch()
+        cards_layout.addWidget(self.peak_card)
         
-        self._trigger_profile_switch.connect(self._do_profile_switch_animation)
-        self._trigger_incognito.connect(self._do_set_incognito)
+        self.top_key_card = MiniCard()
+        tkc_layout = QVBoxLayout(self.top_key_card)
+        tkc_lbl = QLabel("Most Used Key")
+        tkc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        tkc_sub = QLabel("Tasto più premuto in assoluto")
+        tkc_sub.setFont(QFont(FONT_FAMILY, 10))
+        tkc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
+        self.telemetry_sub_labels.append(tkc_sub)
+        self.top_key_val = QLabel("-")
+        self.top_key_val.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
+        tkc_layout.addWidget(tkc_lbl)
+        tkc_layout.addWidget(tkc_sub)
+        tkc_layout.addSpacing(10)
+        tkc_layout.addWidget(self.top_key_val)
+        tkc_layout.addStretch()
+        cards_layout.addWidget(self.top_key_card)
         
-        self._apply_theme(self.current_tokens)
-        self._update_drawer_state()
-        self._update_chip_styles()
-        self.update_ui_stats()
+        self.telemetry_cards = [self.session_card, self.peak_card, self.top_key_card]
+        tel_layout.addLayout(cards_layout)
         
-        if self.settings.get("compact_mode"):
-            self._apply_compact(True)
-            
-        self.setWindowOpacity(0.0)
-        self._fade_opacity = 0.0
-        self._fade_timer = QTimer(self)
-        self._fade_timer.setInterval(16)
-        self._fade_timer.timeout.connect(self._on_fade_tick)
-        if not self.settings.get("welcome_shown"):
-            QTimer.singleShot(50, self._show_welcome)
-        else:
-            QTimer.singleShot(50, self._start_fade_in)
-
-    def _apply_theme(self, tokens: ThemeTokens):
-        qss = build_qss(tokens)
-        self._qt_app.setStyleSheet(qss)
+        self.chart_card = MiniCard()
+        cc_layout = QVBoxLayout(self.chart_card)
+        cc_lbl = QLabel("Activity Timeline")
+        cc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        cc_sub = QLabel("Eventi orari")
+        cc_sub.setFont(QFont(FONT_FAMILY, 10))
+        cc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
+        self.telemetry_sub_labels.append(cc_sub)
+        self.chart_widget = HourlyChartWidget(self, self.tr)
+        cc_layout.addWidget(cc_lbl)
+        cc_layout.addWidget(cc_sub)
+        cc_layout.addSpacing(10)
+        cc_layout.addWidget(self.chart_widget, stretch=1)
+        tel_layout.addWidget(self.chart_card, stretch=1)
+        self.telemetry_cards.append(self.chart_card)
         
-        self.keyboard_widget.set_tokens(tokens)
-        self.header.set_tokens(tokens)
-        self.heatmap_legend.set_tokens(tokens)
-        self.incognito_overlay.set_tokens(tokens)
-        self.settings_drawer.set_tokens(tokens)
-        self.hourly_chart.set_tokens(tokens)
-        for card in [self.session_card, self.leader_card, self.burst_card]:
-            card.set_tokens(tokens)
-            
-        for widget in self.findChildren(QWidget):
-            if isinstance(widget, (QPushButton, QLabel, QCheckBox, QComboBox, QLineEdit, QScrollBar)):
-                widget.setStyleSheet("")
-                
-        self.current_tokens = tokens
-        self._update_chip_styles()
-        self._update_drawer_state()
+        lists_layout = QHBoxLayout()
+        lists_layout.setSpacing(20)
         
-        QApplication.instance().processEvents()
-
-    def _update_drawer_state(self):
-        accent_hex = self.current_tokens.accent
-        self.settings_drawer.accent_btn.setText(f"\u25cf {accent_hex}")
-        self.settings_drawer.accent_btn.setStyleSheet(f"color: {accent_hex}; font-weight: bold;")
+        self.combos_card = MiniCard()
+        cb_layout = QVBoxLayout(self.combos_card)
+        cb_lbl = QLabel("Top Combinations")
+        cb_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        cb_sub = QLabel("Scorciatoie più usate")
+        cb_sub.setFont(QFont(FONT_FAMILY, 10))
+        cb_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
+        self.telemetry_sub_labels.append(cb_sub)
+        self.combos_list = TelemetryProgressListWidget(self, self.tr)
+        cb_layout.addWidget(cb_lbl)
+        cb_layout.addWidget(cb_sub)
+        cb_layout.addSpacing(10)
+        cb_layout.addWidget(self.combos_list, stretch=1)
+        lists_layout.addWidget(self.combos_card, stretch=1)
         
-        is_dark = self.settings.get("theme") == "dark"
-        d_chip = self.settings_drawer.dark_chip
-        l_chip = self.settings_drawer.light_chip
-        selected_qss = f"background: rgba({int(accent_hex[1:3],16)},{int(accent_hex[3:5],16)},{int(accent_hex[5:7],16)},0.15); border: 1px solid {accent_hex}; color: {accent_hex}; border-radius: 14px;"
-        unselected_qss = f"background: transparent; border: 1px solid {self.current_tokens.border}; color: {self.current_tokens.text_secondary}; border-radius: 14px;"
-        d_chip.setStyleSheet(selected_qss if is_dark else unselected_qss)
-        l_chip.setStyleSheet(selected_qss if not is_dark else unselected_qss)
+        self.bigrams_card = MiniCard()
+        bg_layout = QVBoxLayout(self.bigrams_card)
+        bg_lbl = QLabel("Top Bigrams")
+        bg_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        bg_sub = QLabel("Coppie di tasti")
+        bg_sub.setFont(QFont(FONT_FAMILY, 10))
+        bg_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
+        self.telemetry_sub_labels.append(bg_sub)
+        self.bigrams_list = TelemetryProgressListWidget(self, self.tr)
+        bg_layout.addWidget(bg_lbl)
+        bg_layout.addWidget(bg_sub)
+        bg_layout.addSpacing(10)
+        bg_layout.addWidget(self.bigrams_list, stretch=1)
+        lists_layout.addWidget(self.bigrams_card, stretch=1)
         
-        lang_idx = 1 if self.settings.get("language") == "it" else 0
-        self.settings_drawer.lang_combo.setCurrentIndex(lang_idx)
-        self.settings_drawer.compact_check.setChecked(self.settings.get("compact_mode"))
-        self.settings_drawer.kbd_theme_combo.setCurrentText(self.settings.get("keyboard_theme"))
-        self.settings_drawer.overlay_check.setChecked(self.db.get_overlay_enabled())
-
-    def _set_theme_mode(self, mode):
-        if self.settings.get("theme") == mode:
-            return
-        self.settings.set("theme", mode)
-        self._theme_target_tokens = DARK_TOKENS if mode == "dark" else LIGHT_TOKENS
-        self._theme_target_tokens = replace(self._theme_target_tokens, accent=self.settings.get("accent_color"))
+        self.telemetry_cards.extend([self.combos_card, self.bigrams_card])
         
-        self._theme_fade_phase = "out"
-        self._theme_fade_val = 1.0
-        self._theme_fade_timer = QTimer(self)
-        self._theme_fade_timer.setInterval(16)
-        self._theme_fade_timer.timeout.connect(self._on_theme_fade)
-        self._theme_fade_timer.start()
-
-    def _on_theme_fade(self):
-        if self._theme_fade_phase == "out":
-            self._theme_fade_val -= 1.0 / (150.0 / 16.0)
-            if self._theme_fade_val <= 0.3:
-                self._theme_fade_val = 0.3
-                self._theme_fade_phase = "swap"
-            self.setWindowOpacity(self._theme_fade_val)
-        elif self._theme_fade_phase == "swap":
-            self._apply_theme(self._theme_target_tokens)
-            if self.overlay:
-                self.overlay.update_theme(self.current_tokens.accent, self.settings.get("theme") == "light")
-            self._theme_fade_phase = "in"
-        elif self._theme_fade_phase == "in":
-            self._theme_fade_val += 1.0 / (150.0 / 16.0)
-            if self._theme_fade_val >= 1.0:
-                self._theme_fade_val = 1.0
-                self._theme_fade_timer.stop()
-            self.setWindowOpacity(self._theme_fade_val)
-
-    def _pick_accent_color(self):
-        initial = hex_to_qcolor(self.current_tokens.accent)
-        color = QColorDialog.getColor(initial, self, "Choose Accent Color")
-        if color.isValid():
-            new_hex = qcolor_to_hex(color)
-            self.settings.set("accent_color", new_hex)
-            new_tokens = replace(self.current_tokens, accent=new_hex)
-            self._apply_theme(new_tokens)
-            if self.overlay:
-                self.overlay.update_theme(new_hex, self.settings.get("theme") == "light")
-
-    def _toggle_drawer(self):
-        self.settings_drawer.toggle()
-
-    def _show_welcome(self):
-        dlg = WelcomeDialog(self, tr=self.tr, tokens=self.current_tokens)
-        result = dlg.exec()
-        if result == QDialog.DialogCode.Accepted:
-            pname = dlg.get_profile_name()
-            if pname and pname != "Default":
-                self.db.create_profile(pname)
-                self.tracker.set_profile(pname)
-                self.db.set_last_profile(pname)
-                self.viewing_profile = pname
-        self.settings.set("welcome_shown", True)
-        self._start_fade_in()
-
-    def _start_fade_in(self):
-        self._fade_opacity = 0.0
-        self.setWindowOpacity(0.0)
-        self._fade_timer.start()
-
-    def _on_fade_tick(self):
-        self._fade_opacity += 1.0 / (600.0 / 16.0)
-        if self._fade_opacity >= 1.0:
-            self._fade_opacity = 1.0
-            self._fade_timer.stop()
-        self.setWindowOpacity(self._fade_opacity)
+        self.telemetry_labels.extend([sc_lbl, pc_lbl, tkc_lbl, cc_lbl, cb_lbl, bg_lbl])
+        tel_layout.addLayout(lists_layout)
+        
+        self.tab_telemetry.setWidget(tel_container)
+        self.tab_widget.addTab(self.tab_telemetry, self.tr.t("tab_telemetry"))
+        
+        self._create_config_tab()
+        self._create_overlay_tab()
+        
+        self.overlay = IncognitoOverlay(self)
+        self.overlay.resize(self.size())
+        
+        self.sync_settings()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, 'incognito_overlay'):
-            self.incognito_overlay.setGeometry(self.centralWidget().rect())
-        if hasattr(self, 'settings_drawer'):
-            w = self.width()
-            if self.settings_drawer.is_open:
-                self.settings_drawer.setGeometry(w - 320, 0, 320, self.height())
-            else:
-                self.settings_drawer.setGeometry(w, 0, 320, self.height())
+        self.overlay.resize(self.size())
+        if hasattr(self, "settings_drawer") and self.settings_drawer.isVisible():
+            target_width = 380
+            self.settings_drawer.setGeometry(self.width() - target_width, 0, target_width, self.height())
 
-    def _toggle_compact(self):
-        compact = not self.settings.get("compact_mode")
-        self.settings.set("compact_mode", compact)
-        self.settings_drawer.compact_check.setChecked(compact)
-        self._apply_compact(compact)
+    def _create_config_tab(self):
+        self.settings_drawer = QScrollArea(self)
+        self.settings_drawer.setWidgetResizable(True)
+        self.settings_drawer.setFrameShape(QFrame.Shape.NoFrame)
+        self.settings_drawer.setStyleSheet("background: transparent;")
+        
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        drawer_top_bar = QHBoxLayout()
+        drawer_top_bar.addStretch()
+        btn_close_drawer = QPushButton("❌ Chiudi")
+        btn_close_drawer.setFont(QFont(FONT_FAMILY, 10, QFont.Weight.Bold))
+        btn_close_drawer.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close_drawer.clicked.connect(self._toggle_settings_drawer)
+        btn_close_drawer.setStyleSheet(f"background-color: transparent; color: {self.current_tokens.text_secondary}; border: none;")
+        drawer_top_bar.addWidget(btn_close_drawer)
+        layout.addLayout(drawer_top_bar)
+        
+        app_card = MiniCard()
+        app_layout = QVBoxLayout(app_card)
+        app_layout.setSpacing(15)
+        app_lbl = QLabel("Appearance")
+        app_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        app_layout.addWidget(app_lbl)
+        
+        lang_row = QHBoxLayout()
+        lang_row.addWidget(QLabel("Language:"))
+        self.lang_combo = NoScrollComboBox()
+        self.lang_combo.addItems(["en", "it"])
+        self.lang_combo.currentTextChanged.connect(self._on_lang_change)
+        lang_row.addWidget(self.lang_combo)
+        app_layout.addLayout(lang_row)
+        
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("UI Theme:"))
+        self.theme_combo = NoScrollComboBox()
+        self.theme_combo.addItems(["Dark", "Light"])
+        self.theme_combo.currentTextChanged.connect(self._on_theme_change)
+        theme_row.addWidget(self.theme_combo)
+        app_layout.addLayout(theme_row)
+        
+        kb_theme_row = QHBoxLayout()
+        kb_theme_row.addWidget(QLabel("Heatmap Theme:"))
+        self.kb_theme_combo = NoScrollComboBox()
+        self.kb_theme_combo.addItems(list(KEYBOARD_THEMES.keys()))
+        self.kb_theme_combo.currentTextChanged.connect(self._on_kb_theme_change)
+        kb_theme_row.addWidget(self.kb_theme_combo)
+        app_layout.addLayout(kb_theme_row)
+        
+        kb_style_row = QHBoxLayout()
+        kb_style_row.addWidget(QLabel("Keyboard Style:"))
+        self.kb_style_combo = NoScrollComboBox()
+        self.kb_style_combo.addItems(["Mechanical", "Neon Cyberpunk", "Pudding Keycaps"])
+        self.kb_style_combo.currentTextChanged.connect(self._on_kb_style_change)
+        kb_style_row.addWidget(self.kb_style_combo)
+        app_layout.addLayout(kb_style_row)
+        
+        kb_layout_row = QHBoxLayout()
+        kb_layout_row.addWidget(QLabel("Keyboard Layout:"))
+        self.kb_layout_combo = NoScrollComboBox()
+        self.kb_layout_combo.addItems(["100%", "TKL", "60%"])
+        self.kb_layout_combo.currentTextChanged.connect(self._on_kb_layout_change)
+        kb_layout_row.addWidget(self.kb_layout_combo)
+        app_layout.addLayout(kb_layout_row)
+        
+        color_row = QHBoxLayout()
+        color_row.addWidget(QLabel("Accent Color:"))
+        self.color_btn = QPushButton("")
+        self.color_btn.setFixedSize(24, 24)
+        self.color_btn.clicked.connect(self._pick_color)
+        color_row.addWidget(self.color_btn)
+        color_row.addStretch()
+        app_layout.addLayout(color_row)
+        
+        layout.addWidget(app_card)
+        
+        beh_card = MiniCard()
+        beh_layout = QVBoxLayout(beh_card)
+        beh_layout.setSpacing(15)
+        beh_lbl = QLabel("Behavior")
+        beh_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        beh_layout.addWidget(beh_lbl)
+        
+        cmp_row = QHBoxLayout()
+        cmp_row.addWidget(QLabel("Enable Compact Mode"))
+        cmp_row.addStretch()
+        self.compact_cb = ModernSwitch()
+        self.compact_cb.toggled.connect(self._on_compact_change)
+        cmp_row.addWidget(self.compact_cb)
+        beh_layout.addLayout(cmp_row)
+        
+        startup_row = QHBoxLayout()
+        startup_row.addWidget(QLabel("Start with Windows"))
+        startup_row.addStretch()
+        self.startup_cb = ModernSwitch()
+        self.startup_cb.toggled.connect(self._on_startup_change)
+        startup_row.addWidget(self.startup_cb)
+        beh_layout.addLayout(startup_row)
+        
+        layout.addWidget(beh_card)
+        
+        data_card = MiniCard()
+        data_layout = QVBoxLayout(data_card)
+        data_layout.setSpacing(15)
+        data_lbl = QLabel("Data & Profiles")
+        data_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        data_layout.addWidget(data_lbl)
+        
+        prof_row = QHBoxLayout()
+        prof_row.addWidget(QLabel("Active Profile:"))
+        self.profile_combo = NoScrollComboBox()
+        self.profile_combo.setMinimumWidth(200)
+        self.profile_combo.addItems(self.db.get_profiles())
+        self.profile_combo.setCurrentText(self.current_profile)
+        self.profile_combo.currentTextChanged.connect(self._on_profile_changed_ui)
+        prof_row.addWidget(self.profile_combo)
+        prof_row.addStretch()
+        data_layout.addLayout(prof_row)
+        
+        self.smart_map_btn = QPushButton("Configure Auto-Switch")
+        self.smart_map_btn.clicked.connect(self._open_smart_map)
+        data_layout.addWidget(self.smart_map_btn)
+        
+        self.export_btn = QPushButton("Export Data...")
+        self.export_btn.clicked.connect(self._open_export)
+        data_layout.addWidget(self.export_btn)
+        
+        self.reset_btn = QPushButton("Reset Profile Stats")
+        self.reset_btn.setStyleSheet("color: #FF3B3B; font-weight: bold;")
+        self.reset_btn.clicked.connect(self._reset_stats)
+        data_layout.addWidget(self.reset_btn)
+        
+        layout.addWidget(data_card)
+        
+        self.settings_drawer.setWidget(container)
+        self.config_cards = [app_card, beh_card, data_card]
+        
+        self.settings_drawer.setStyleSheet(f"QScrollArea {{ background-color: {self.current_tokens.bg_panel}; border-left: 2px solid {self.current_tokens.border}; }}")
+        self.settings_drawer.hide()
+        self.settings_drawer.raise_()
+        
+    def _create_overlay_tab(self):
+        self.tab_overlay = QScrollArea()
+        self.tab_overlay.setWidgetResizable(True)
+        self.tab_overlay.setFrameShape(QFrame.Shape.NoFrame)
+        self.tab_overlay.setStyleSheet("background: transparent;")
+        
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        self.btn_toggle_overlay = QPushButton("Mostra Widget Fluttuante")
+        self.btn_toggle_overlay.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        self.btn_toggle_overlay.clicked.connect(self._on_overlay_toggle)
+        layout.addWidget(self.btn_toggle_overlay)
+        
+        metrics_card = MiniCard()
+        metrics_layout = QVBoxLayout(metrics_card)
+        metrics_layout.setSpacing(15)
+        metrics_lbl = QLabel("Overlay Metrics")
+        metrics_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        metrics_layout.addWidget(metrics_lbl)
+        
+        self.overlay_show_apm = ModernSwitch()
+        self.overlay_show_wpm = ModernSwitch()
+        self.overlay_show_peak = ModernSwitch()
+        self.overlay_show_profile = ModernSwitch()
+        
+        toggles = [
+            ("Show APM", self.overlay_show_apm, "overlay_show_apm"),
+            ("Show WPM", self.overlay_show_wpm, "overlay_show_wpm"),
+            ("Show Peak APM", self.overlay_show_peak, "overlay_show_peak"),
+            ("Show Profile", self.overlay_show_profile, "overlay_show_profile")
+        ]
+        
+        for text, cb, key in toggles:
+            row = QHBoxLayout()
+            lbl = QLabel(text)
+            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            lbl.mousePressEvent = lambda e, c=cb: c.toggle()
+            row.addWidget(lbl)
+            row.addStretch()
+            cb.toggled.connect(lambda checked, k=key: self._on_overlay_setting_change(k, checked))
+            row.addWidget(cb)
+            metrics_layout.addLayout(row)
+            
+        layout.addWidget(metrics_card)
+        
+        app_card = MiniCard()
+        app_layout = QVBoxLayout(app_card)
+        app_layout.setSpacing(15)
+        app_lbl = QLabel("Overlay Appearance")
+        app_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        app_layout.addWidget(app_lbl)
+        
+        from PyQt6.QtWidgets import QSlider
+        
+        op_row = QHBoxLayout()
+        op_row.addWidget(QLabel("Opacity:"))
+        self.overlay_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.overlay_opacity_slider.setRange(20, 100)
+        self.overlay_opacity_slider.valueChanged.connect(self._on_overlay_opacity_change)
+        op_row.addWidget(self.overlay_opacity_slider)
+        app_layout.addLayout(op_row)
+        
+        sc_row = QHBoxLayout()
+        sc_row.addWidget(QLabel("Scale:"))
+        self.overlay_scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.overlay_scale_slider.setRange(50, 200)
+        self.overlay_scale_slider.valueChanged.connect(self._on_overlay_scale_change)
+        sc_row.addWidget(self.overlay_scale_slider)
+        app_layout.addLayout(sc_row)
+        
+        layout.addWidget(app_card)
+        
+        self.tab_overlay.setWidget(container)
+        self.tab_widget.addTab(self.tab_overlay, "Overlay")
+        self.overlay_cards = [metrics_card, app_card]
+        
+    def _on_overlay_opacity_change(self, val):
+        self.settings_mgr.set("overlay_opacity", val / 100.0)
+        if hasattr(self, "floating_overlay"):
+            self.floating_overlay.apply_settings()
+            
+    def _on_overlay_scale_change(self, val):
+        self.settings_mgr.set("overlay_scale", val / 100.0)
+        if hasattr(self, "floating_overlay"):
+            self.floating_overlay.apply_settings()
 
-    def _toggle_compact_check(self, state):
-        compact = bool(state)
-        self.settings.set("compact_mode", compact)
-        self._apply_compact(compact)
+    def _on_overlay_setting_change(self, key, value):
+        self.settings_mgr.set(key, value)
+        if hasattr(self, "floating_overlay"):
+            self.floating_overlay.apply_settings()
 
-    def _apply_compact(self, compact):
-        if compact:
-            self.tab_container.hide()
-            self.setFixedSize(900, 280)
-            self.header.compact_btn.setText("\u229e")
-            self.header.compact_btn.setToolTip(self.tr.t("expand") if self.tr else "Expand")
+    def _on_overlay_toggle(self):
+        if not hasattr(self, "floating_overlay"):
+            from overlay import FloatingOverlay
+            self.floating_overlay = FloatingOverlay(self, self.settings_mgr)
+            self.floating_overlay.apply_settings()
+        if self.floating_overlay.isVisible():
+            self.floating_overlay.deactivate()
+            self.btn_toggle_overlay.setText("Mostra Widget Fluttuante")
         else:
-            self.tab_container.show()
-            self.setMinimumSize(900, 500)
-            self.setMaximumSize(16777215, 16777215)
-            self.header.compact_btn.setText("\u229f")
-            self.header.compact_btn.setToolTip(self.tr.t("compact_mode") if self.tr else "Compact Mode")
+            self.floating_overlay.activate()
+            self.btn_toggle_overlay.setText("Nascondi Widget Fluttuante")
+
+    def sync_settings(self):
+        mgr = self.settings_mgr
+        
+        self.theme_combo.blockSignals(True)
+        self.lang_combo.blockSignals(True)
+        self.compact_cb.blockSignals(True)
+        self.kb_theme_combo.blockSignals(True)
+        self.kb_style_combo.blockSignals(True)
+        self.kb_layout_combo.blockSignals(True)
+        self.startup_cb.blockSignals(True)
+        
+        self.overlay_show_apm.blockSignals(True)
+        self.overlay_show_wpm.blockSignals(True)
+        self.overlay_show_peak.blockSignals(True)
+        self.overlay_show_profile.blockSignals(True)
+        self.overlay_opacity_slider.blockSignals(True)
+        self.overlay_scale_slider.blockSignals(True)
+        
+        self.theme_combo.setCurrentText(mgr.get("theme").capitalize())
+        self.lang_combo.setCurrentText(mgr.get("language"))
+        self.compact_cb.setChecked(mgr.get("compact_mode"))
+        self.kb_theme_combo.setCurrentText(mgr.get("keyboard_theme"))
+        self.kb_style_combo.setCurrentText(mgr.get("keyboard_style"))
+        self.kb_layout_combo.setCurrentText(mgr.get("keyboard_layout") or "100%")
+        
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
+            val, _ = winreg.QueryValueEx(key, "TypeTrace")
+            self.startup_cb.setChecked(True)
+            winreg.CloseKey(key)
+        except Exception:
+            self.startup_cb.setChecked(False)
+            
+        self.overlay_show_apm.setChecked(mgr.get("overlay_show_apm"))
+        self.overlay_show_wpm.setChecked(mgr.get("overlay_show_wpm"))
+        self.overlay_show_peak.setChecked(mgr.get("overlay_show_peak"))
+        self.overlay_show_profile.setChecked(mgr.get("overlay_show_profile"))
+        self.overlay_opacity_slider.setValue(int(mgr.get("overlay_opacity") * 100))
+        self.overlay_scale_slider.setValue(int(mgr.get("overlay_scale") * 100))
+        
+        self.theme_combo.blockSignals(False)
+        self.lang_combo.blockSignals(False)
+        self.compact_cb.blockSignals(False)
+        self.kb_theme_combo.blockSignals(False)
+        self.kb_style_combo.blockSignals(False)
+        self.kb_layout_combo.blockSignals(False)
+        self.startup_cb.blockSignals(False)
+        
+        self.overlay_show_apm.blockSignals(False)
+        self.overlay_show_wpm.blockSignals(False)
+        self.overlay_show_peak.blockSignals(False)
+        self.overlay_show_profile.blockSignals(False)
+        self.overlay_opacity_slider.blockSignals(False)
+        self.overlay_scale_slider.blockSignals(False)
+
+    def _on_kb_layout_change(self, text):
+        self.settings_mgr.set("keyboard_layout", text)
+        if hasattr(self, "heatmap"):
+            self.heatmap.update()
+
+    def _on_theme_change(self, text):
+        if hasattr(self, "change_theme_mode"):
+            self.change_theme_mode(text.lower())
+
+    def _on_lang_change(self, text):
+        self.settings_mgr.set("language", text)
+        QMessageBox.information(self, "Restart Required", "Language changed. Please restart TypeTrace for the changes to take effect.")
+
+    def _on_compact_change(self, checked):
+        if self.is_compact != checked:
+            self.toggle_compact_mode()
+
+    def _on_heatmap_toggle(self, checked):
+        if hasattr(self, "heatmap"):
+            self.heatmap.heatmap_enabled = checked
+            self._update_heatmap_colors()
+            self.heatmap.update()
+
+    def _toggle_settings_drawer(self):
+        if not hasattr(self, "settings_drawer"): return
+        target_width = 380
+        is_open = self.settings_drawer.isVisible()
+        
+        if not is_open:
+            self.settings_drawer.setGeometry(self.width(), 0, target_width, self.height())
+            self.settings_drawer.show()
+            self.settings_drawer.raise_()
+            end_x = self.width() - target_width
+        else:
+            end_x = self.width()
+            
+        self.drawer_anim = QPropertyAnimation(self.settings_drawer, b"geometry")
+        self.drawer_anim.setDuration(250)
+        self.drawer_anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+        self.drawer_anim.setStartValue(self.settings_drawer.geometry())
+        self.drawer_anim.setEndValue(QRect(end_x, 0, target_width, self.height()))
+        
+        if is_open:
+            self.drawer_anim.finished.connect(self.settings_drawer.hide)
+        self.drawer_anim.start()
+
+    def _on_kb_theme_change(self, text):
+        if hasattr(self, "heatmap"):
+            self.heatmap.set_theme(text)
+            self.legend.set_theme(text)
+            self.settings_mgr.set("keyboard_theme", text)
+
+    def _on_kb_style_change(self, text):
+        if hasattr(self, "heatmap"):
+            self.settings_mgr.set("keyboard_style", text)
+            self.heatmap.update()
+
+    def _on_startup_change(self, checked):
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
+            if checked:
+                exe_path = os.path.abspath(sys.argv[0])
+                winreg.SetValueEx(key, "TypeTrace", 0, winreg.REG_SZ, f'"{exe_path}"')
+            else:
+                try:
+                    winreg.DeleteValue(key, "TypeTrace")
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except Exception as e:
+            logging.error(f"Failed to set startup registry key: {e}")
+
+    def _pick_color(self):
+        c = QColorDialog.getColor(hex_to_qcolor(self.current_tokens.accent), self, "Select Accent Color")
+        if c.isValid():
+            hex_c = qcolor_to_hex(c)
+            if hasattr(self, "change_accent_color"):
+                self.change_accent_color(hex_c)
+
+    def _open_smart_map(self):
+        d = ProcessMappingDialog(self, self.db, self.tr, self.current_tokens)
+        d.exec()
+
+    def _open_export(self):
+        d = ExportDialog(self, self.db, self.current_profile, self.tr, self.current_tokens)
+        d.exec()
+
+    def _reset_stats(self):
+        prof = self.current_profile
+        reply = QMessageBox.question(self, "Reset Stats", f"Are you sure you want to reset all stats for profile '{prof}'?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.db.reset_profile(prof)
+            self._request_full_update()
+
+    def _apply_theme(self, tokens: ThemeTokens):
+        self.current_tokens = tokens
+        qss = build_qss(tokens)
+        QApplication.instance().setStyleSheet(qss)
+        
+        self.tab_widget.tabBar().setStyleSheet(f"""
+            QTabBar {{
+                background-color: {tokens.bg_window};
+                border-bottom: 1px solid {tokens.border};
+            }}
+            QTabBar::tab {{
+                background: {tokens.bg_window};
+                color: {tokens.text_secondary};
+                padding: 10px 24px;
+                border: none;
+                font-size: 13px;
+                min-width: 120px;
+            }}
+            QTabBar::tab:selected {{
+                color: {tokens.text_primary};
+                border-bottom: 2px solid {tokens.accent};
+                background: {tokens.bg_panel};
+            }}
+            QTabBar::tab:hover:!selected {{
+                color: {tokens.text_primary};
+                background: {tokens.bg_hover};
+            }}
+        """)
+        self.tab_widget.setStyleSheet(f"""
+            QTabWidget::pane {{
+                background: {tokens.tab_pane_bg};
+                border: 1px solid {tokens.border};
+                border-top: none;
+            }}
+            QTabWidget > QTabBar {{
+                background-color: {tokens.bg_window};
+            }}
+        """)
+        
+        for cards_list in [self.telemetry_cards, getattr(self, 'config_cards', []), getattr(self, 'overlay_cards', [])]:
+            for card in cards_list:
+                if hasattr(card, "set_tokens"):
+                    card.set_tokens(tokens)
+                else:
+                    card.setStyleSheet(f"background-color: {tokens.bg_panel}; border: 1px solid {tokens.border}; border-radius: 10px;")
+        
+        self.header.set_tokens(tokens)
+        self.heatmap.set_tokens(tokens)
+        self.legend.set_tokens(tokens)
+        self.chart_widget.set_tokens(tokens)
+        self.combos_list.set_tokens(tokens)
+        self.bigrams_list.set_tokens(tokens)
+        self.overlay.set_tokens(tokens)
+        
+        if hasattr(self, "compact_cb"):
+            self.compact_cb.set_tokens(tokens)
+            self.startup_cb.set_tokens(tokens)
+            self.overlay_show_apm.set_tokens(tokens)
+            self.overlay_show_wpm.set_tokens(tokens)
+            self.overlay_show_peak.set_tokens(tokens)
+            self.overlay_show_profile.set_tokens(tokens)
+            
+        if hasattr(self, "btn_toggle_overlay"):
+            self.btn_toggle_overlay.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {tokens.accent};
+                    border: 2px solid {tokens.accent};
+                    border-radius: 8px;
+                    padding: 10px;
+                }}
+                QPushButton:hover {{
+                    background-color: rgba({int(tokens.accent[1:3], 16)}, {int(tokens.accent[3:5], 16)}, {int(tokens.accent[5:7], 16)}, 0.15);
+                }}
+            """)
+            
+        if hasattr(self, "heatmap_toggle"):
+            self.heatmap_toggle.set_tokens(tokens)
+        if hasattr(self, "main_stats_lbl"):
+            self.main_stats_lbl.setStyleSheet(f"color: {tokens.text_primary};")
+        if hasattr(self, "settings_drawer"):
+            self.settings_drawer.setStyleSheet(f"QScrollArea {{ background-color: {tokens.bg_panel}; border-left: 2px solid {tokens.border}; }}")
+        if hasattr(self, "btn_close_drawer"):
+            self.btn_close_drawer.setStyleSheet(f"background-color: transparent; color: {tokens.text_secondary}; border: none;")
+            
+        self.setStyleSheet(f"TypeTraceUI {{ background-color: {tokens.bg_window}; }}")
+        
+        for lbl in self.telemetry_labels + getattr(self, "telemetry_sub_labels", []):
+            lbl.setStyleSheet("color: " + tokens.text_secondary)
+        
+        self._update_heatmap_colors()
+        self.update()
+        self.tab_widget.tabBar().update()
+        self.tab_widget.update()
+        self.tab_widget.tabBar().repaint()
+
+    def change_theme_mode(self, mode_str: str):
+        is_dark = (mode_str.lower() == "dark")
+        if is_dark == self.is_dark_mode:
+            return
+            
+        self.transition_pixmap = self.grab()
+        self.transition_label = QLabel(self)
+        self.transition_label.setPixmap(self.transition_pixmap)
+        self.transition_label.setGeometry(self.rect())
+        self.transition_label.show()
+        
+        self.is_dark_mode = is_dark
+        self.settings_mgr.set("theme", mode_str.lower())
+        base = DARK_TOKENS if is_dark else LIGHT_TOKENS
+        new_tokens = replace(base, accent=self.settings_mgr.get("accent_color"))
+        self._apply_theme(new_tokens)
+        
+        effect = QGraphicsOpacityEffect(self.transition_label)
+        self.transition_label.setGraphicsEffect(effect)
+        self.transition_anim = QPropertyAnimation(effect, b"opacity")
+        self.transition_anim.setDuration(300)
+        self.transition_anim.setStartValue(1.0)
+        self.transition_anim.setEndValue(0.0)
+        self.transition_anim.finished.connect(self.transition_label.deleteLater)
+        self.transition_anim.start()
+
+    def change_accent_color(self, hex_color: str):
+        self.settings_mgr.set("accent_color", hex_color)
+        new_tokens = replace(self.current_tokens)
+        new_tokens.accent = hex_color
+        self._apply_theme(new_tokens)
+
+    def toggle_compact_mode(self):
+        self.is_compact = not self.is_compact
+        self.settings_mgr.set("compact_mode", self.is_compact)
+        if self.is_compact:
+            self.header.setFixedHeight(40)
+            self.header.title_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+            self.header.subtitle_lbl.hide()
+            self.legend.hide()
+        else:
+            self.header.setFixedHeight(80)
+            self.header.title_lbl.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
+            self.header.subtitle_lbl.show()
+            if self.heatmap.heatmap_enabled:
+                self.legend.show()
+
+    def _on_tracker_event(self, event_type, value):
+        self.event_queue.put((event_type, value))
+
+    def _process_queue(self):
+        needs_heatmap_update = False
+        while not self.event_queue.empty():
+            try:
+                ev_type, val = self.event_queue.get_nowait()
+                if ev_type == "keystroke":
+                    self.heatmap.add_ripple(val)
+                    needs_heatmap_update = True
+                elif ev_type == "incognito":
+                    self.header.is_incognito = val
+                    if val:
+                        self.overlay.activate()
+                    else:
+                        self.overlay.deactivate()
+                    self.header.update_stats(self.header.apm, self.header.wpm, self.header.is_tracking)
+                elif ev_type == "toggle_overlay":
+                    pass 
+                elif ev_type == "restore":
+                    self.show()
+                    self.activateWindow()
+                elif ev_type == "exit":
+                    self._force_quit = True
+                    self.close()
+                elif ev_type == "profile_changed":
+                    if self.profile_combo.currentText() != val:
+                        self.profile_combo.setCurrentText(val)
+                    if val != self.current_profile:
+                        self.heatmap.start_gaming_banner(self.current_profile)
+                    self.current_profile = val
+                    self._request_full_update()
+                elif ev_type == "burst_detected":
+                    peak, dur = val
+                    txt = f"{peak} APM ({dur:.1f}s)"
+                    self.burst_val.setText(txt)
+            except queue.Empty:
+                break
+        
+        apm, wpm = self.tracker.get_apm_wpm()
+        is_tracking = not getattr(self.tracker, "incognito_mode", False)
+        self.header.update_stats(apm, wpm, is_tracking)
+        
+        if hasattr(self, "floating_overlay") and self.floating_overlay.isVisible():
+            self.floating_overlay.update_data(apm, wpm, "00:00:00", self.current_profile, "Space (0%)")
+        
+        if needs_heatmap_update and self.heatmap.heatmap_enabled:
+            self._update_heatmap_colors()
 
     def _on_anim_tick(self):
         self.header.on_anim_tick()
         self.header.update()
-        self.keyboard_widget.update()
-        if self.heatmap_enabled:
-            self.heatmap_legend.update()
-        if self.incognito_active:
-            self.incognito_overlay.update()
-        if self.overlay and self.overlay.isVisible():
-            session_dur = self.tracker.get_session_duration()
-            aggregated = self.db.get_aggregated_stats(self.viewing_profile)
-            keys_data = aggregated.get("keys", {})
-            total = sum(keys_data.values())
-            top_key_str = "None (0%)"
-            if keys_data:
-                top_k = max(keys_data, key=keys_data.get)
-                pct = (keys_data[top_k] / total * 100) if total > 0 else 0
-                top_key_str = f"{top_k} ({pct:.1f}%)"
-            apm, wpm = self.tracker.get_apm_wpm()
-            self.overlay.update_data(apm=apm, wpm=wpm, session=session_dur, profile=self.viewing_profile, top_key=top_key_str)
+        self.heatmap.update()
 
     def _on_tab_changed(self, index):
-        self.stacked_widget.setCurrentIndex(index)
-        widget = self.stacked_widget.currentWidget()
-        effect = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(effect)
-        self.tab_anim = QPropertyAnimation(effect, b"opacity")
-        self.tab_anim.setDuration(150)
-        self.tab_anim.setStartValue(0.0)
-        self.tab_anim.setEndValue(1.0)
-        self.tab_anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        if index == 1:
+            self._update_telemetry()
+        elif index == 0:
+            self._update_heatmap_colors()
 
-    def _build_config_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(15, 12, 15, 12)
-        layout.setSpacing(8)
-        
-        lbl_sel = QLabel(self.tr.t("select_profile") if self.tr else "SELECT PROFILE")
-        layout.addWidget(lbl_sel)
-        
-        profile_row = QHBoxLayout()
-        profile_row.setSpacing(6)
-        profile_row.setContentsMargins(0, 0, 0, 0)
-        self.profile_btn_group = QButtonGroup(self)
-        self.profile_btn_group.setExclusive(True)
-        self.chips = {}
-        for name, icon in [("Total", "\U0001f310"), ("Desktop", "\U0001f5a5\ufe0f"), ("Gaming", "\U0001f3ae")]:
-            btn = QPushButton(f"{icon} {name}")
-            btn.setFixedHeight(28)
-            btn.setMinimumWidth(max(60, len(name) * 9 + 20))
-            btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            btn.setCheckable(True)
-            btn.clicked.connect(lambda checked, n=name: self._on_profile_chip_clicked(n))
-            self.profile_btn_group.addButton(btn)
-            profile_row.addWidget(btn)
-            self.chips[name] = btn
-            
-        self.profile_combobox = QComboBox()
-        self.profile_combobox.addItems(self._get_custom_profiles())
-        self.profile_combobox.setPlaceholderText("custom \u25be")
-        self.profile_combobox.setCurrentIndex(-1)
-        self.profile_combobox.currentTextChanged.connect(self._on_custom_profile_selected)
-        profile_row.addWidget(self.profile_combobox)
-        
-        add_btn = QPushButton("+")
-        add_btn.setFixedSize(28, 28)
-        add_btn.clicked.connect(self._create_profile_dialog)
-        profile_row.addWidget(add_btn)
-        
-        self.del_profile_btn = QPushButton("\U0001f5d1")
-        self.del_profile_btn.setFixedSize(28, 28)
-        self.del_profile_btn.clicked.connect(self._delete_active_profile)
-        self.del_profile_btn.setVisible(False)
-        profile_row.addWidget(self.del_profile_btn)
-        
-        profile_row.addStretch()
-        layout.addLayout(profile_row)
-        
-        layout.addStretch()
-        
-        hint = QLabel("Open \u2699 Settings for more options")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(hint)
-        
-        layout.addStretch()
-        return tab
+    def _on_profile_changed_ui(self, profile_name):
+        if profile_name != self.current_profile:
+            self.current_profile = profile_name
+            self.tracker.set_active_profile(profile_name)
+            self._request_full_update()
 
-    def _build_telemetry_tab(self):
-        tab = QWidget()
-        layout = QHBoxLayout(tab)
-        layout.setContentsMargins(10, 12, 10, 12)
-        layout.setSpacing(8)
-        
-        self.session_card = MiniCard()
-        sc_layout = QVBoxLayout(self.session_card)
-        sc_layout.setContentsMargins(12, 10, 12, 10)
-        self.sc_title = QLabel(self.tr.t("session") if self.tr else "Session")
-        sc_layout.addWidget(self.sc_title)
-        self.session_time_lbl = QLabel("00:00:00")
-        self.session_time_lbl.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
-        sc_layout.addWidget(self.session_time_lbl)
-        self.session_keys_lbl = QLabel("Keys: 0")
-        sc_layout.addWidget(self.session_keys_lbl)
-        self.error_ratio_lbl = QLabel("\u232b Ratio: 0.0%")
-        sc_layout.addWidget(self.error_ratio_lbl)
-        sc_layout.addStretch()
-        layout.addWidget(self.session_card)
-        
-        self.leader_card = MiniCard()
-        lc_layout = QVBoxLayout(self.leader_card)
-        lc_layout.setContentsMargins(12, 10, 12, 10)
-        self.lc_title = QLabel(self.tr.t("top_keys") if self.tr else "Top Keys")
-        lc_layout.addWidget(self.lc_title)
-        self.top_keys_labels = []
-        for i in range(3):
-            lbl = QLabel(f"{i+1}. \u2014")
-            lbl.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
-            lc_layout.addWidget(lbl)
-            self.top_keys_labels.append(lbl)
-        self.combo_title = QLabel(self.tr.t("top_combos") if self.tr else "Top Combos")
-        lc_layout.addWidget(self.combo_title)
-        self.top_combos_labels = []
-        for i in range(2):
-            lbl = QLabel(f"{i+1}. \u2014")
-            lbl.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
-            lc_layout.addWidget(lbl)
-            self.top_combos_labels.append(lbl)
-        lc_layout.addStretch()
-        layout.addWidget(self.leader_card)
-        
-        self.burst_card = MiniCard()
-        bc_layout = QVBoxLayout(self.burst_card)
-        bc_layout.setContentsMargins(12, 10, 12, 10)
-        self.bc_title = QLabel(self.tr.t("bursts") if self.tr else "Bursts")
-        bc_layout.addWidget(self.bc_title)
-        self.total_bursts_lbl = QLabel("0 recorded")
-        self.total_bursts_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
-        bc_layout.addWidget(self.total_bursts_lbl)
-        self.records_title = QLabel(self.tr.t("records") if self.tr else "Records")
-        bc_layout.addWidget(self.records_title)
-        self.burst_labels = []
-        for i in range(3):
-            lbl = QLabel(f"{i+1}. \u2014")
-            lbl.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
-            bc_layout.addWidget(lbl)
-            self.burst_labels.append(lbl)
-        bc_layout.addStretch()
-        layout.addWidget(self.burst_card)
-        return tab
-
-    def _build_chart_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(15, 12, 15, 12)
-        self.hourly_chart = HourlyChartWidget(tr=self.tr)
-        layout.addWidget(self.hourly_chart)
-        return tab
-
-    def _change_language(self, index):
-        codes = ["en", "it"]
-        code = codes[index] if index < len(codes) else "en"
-        self.settings.set("language", code)
-        self.settings_drawer.lang_notice.setText(self.tr.t("restart_notice") if self.tr else "Restart to apply")
-        self.settings_drawer.lang_notice.setVisible(True)
-        QTimer.singleShot(3000, lambda: self.settings_drawer.lang_notice.setVisible(False))
-
-    def _on_background_tick(self):
-        try:
-            if not self.isVisible():
-                return
-            self.update_ui_stats()
-        except Exception as e:
-            logging.exception(f"Error in background update: {e}")
-
-    def _poll_event_queue(self):
-        if self._event_queue is None:
-            return
-        for _ in range(50):
-            try:
-                event_type, val = self._event_queue.get_nowait()
-                self.handle_thread_event(event_type, val)
-                self._event_queue.task_done()
-            except queue.Empty:
-                break
-
-    def _save_data(self):
-        try:
-            self.db.save_data()
-        except Exception:
-            pass
-
-    def update_ui_stats(self):
-        try:
-            apm, wpm = self.tracker.get_apm_wpm()
-            is_tracking = not self.tracker.incognito_mode
-            self.header.update_stats(apm, wpm, is_tracking)
-            session_dur = self.tracker.get_session_duration()
-            self.session_time_lbl.setText(session_dur)
-            aggregated = self.db.get_aggregated_stats(self.viewing_profile)
-            total_keys = sum(aggregated.get("keys", {}).values())
-            self.session_keys_lbl.setText(f"Keys: {total_keys}")
-            keys_data = aggregated.get("keys", {})
-            total_clicks = sum(keys_data.values())
-            backspace_clicks = keys_data.get("Backspace", 0) + keys_data.get("Delete", 0)
-            ratio = (backspace_clicks / total_clicks) * 100 if total_clicks > 0 else 0.0
-            self.error_ratio_lbl.setText(f"\u232b Ratio: {ratio:.1f}%")
-            sorted_keys = sorted(keys_data.items(), key=lambda x: x[1], reverse=True)[:len(self.top_keys_labels)]
-            for idx in range(len(self.top_keys_labels)):
-                lbl = self.top_keys_labels[idx]
-                if idx < len(sorted_keys):
-                    k, count = sorted_keys[idx]
-                    k_lbl = "Space" if k == "Space" else ("Num" + k.replace("Kp_", "") if k.startswith("Kp_") else k)
-                    lbl.setText(f"{idx+1}. {k_lbl} : {count}")
-                else:
-                    lbl.setText(f"{idx+1}. \u2014")
-            sorted_combos = sorted(aggregated.get("combinations", {}).items(), key=lambda x: x[1], reverse=True)[:len(self.top_combos_labels)]
-            for idx in range(len(self.top_combos_labels)):
-                lbl = self.top_combos_labels[idx]
-                if idx < len(sorted_combos):
-                    combo, count = sorted_combos[idx]
-                    lbl.setText(f"{idx+1}. {combo} : {count}")
-                else:
-                    lbl.setText(f"{idx+1}. \u2014")
-            bursts = self.db.get_burst_records(self.viewing_profile)
-            self.total_bursts_lbl.setText(f"{len(bursts)} recorded")
-            for idx in range(len(self.burst_labels)):
-                lbl = self.burst_labels[idx]
-                if idx < len(bursts):
-                    record = bursts[idx]
-                    lbl.setText(f"{idx+1}. {record['peak_apm']}APM {record['duration']}s")
-                else:
-                    lbl.setText(f"{idx+1}. \u2014")
-            profile_data = self.db.get_stats_for_profile(self.viewing_profile)
-            hourly_data = profile_data.get("hourly", {})
-            self.hourly_chart.set_data(hourly_data)
-            self.keyboard_widget.key_stats = keys_data
-            
-            ts = self.current_tokens.text_secondary
-            for lbl in [self.sc_title, self.lc_title, self.combo_title, self.bc_title, self.records_title]:
-                lbl.setStyleSheet(f"color: {ts}; font-size: 11px; font-weight: bold; background: transparent;")
-            for lbl in [self.session_keys_lbl, self.error_ratio_lbl]:
-                lbl.setStyleSheet(f"color: {ts}; font-size: 12px; background: transparent;")
-            for lbls in [self.top_keys_labels, self.top_combos_labels, self.burst_labels]:
-                for lbl in lbls:
-                    lbl.setStyleSheet(f"color: {ts}; font-size: 12px; font-family: Consolas; font-weight: bold; background: transparent;")
-
-            if getattr(self, "del_profile_btn", None):
-                self.del_profile_btn.setStyleSheet("background: #A63A50; color: #FFFFFF; border: none;")
-        except Exception as e:
-            logging.exception(f"Error updating UI stats: {e}")
+    def _request_full_update(self):
+        if self.tab_widget.currentIndex() == 0:
+            self._update_heatmap_colors()
+        elif self.tab_widget.currentIndex() == 1:
+            self._update_telemetry()
 
     def _update_heatmap_colors(self):
-        if not self.heatmap_enabled:
+        agg_stats = self.db.get_aggregated_stats(self.current_profile)
+        keys_data = agg_stats.get("keys", {})
+        self.heatmap.key_stats = keys_data
+        
+        if not self.heatmap.heatmap_enabled:
+            self.heatmap.update_colors({})
+            self.heatmap.update()
             return
-        aggregated = self.db.get_aggregated_stats(self.viewing_profile)
-        keys_counts = aggregated.get("keys", {})
-        all_ids = [k["id"] for k in KEYBOARD_LAYOUT]
-        visible_counts = []
-        for key_id in all_ids:
-            count = keys_counts.get(key_id, 0)
-            mirror_map = {"Kp_enter": "Enter", "Shift_R": "Shift_L", "Ctrl_R": "Ctrl_L", "Alt_R": "Alt_L", "Win_R": "Win_L"}
-            if count == 0 and key_id in mirror_map:
-                count = keys_counts.get(mirror_map[key_id], 0)
-            visible_counts.append(count)
-        max_count = max(visible_counts) if visible_counts else 0
-        color_map = {}
-        for i, key_id in enumerate(all_ids):
-            factor = visible_counts[i] / max_count if max_count > 0 else 0.0
-            color_map[key_id] = self.keyboard_widget._resolve_color(factor)
-        self.keyboard_widget.update_colors(color_map)
-
-    def _toggle_heatmap(self, state):
-        self.heatmap_enabled = bool(state)
-        self.keyboard_widget.heatmap_enabled = self.heatmap_enabled
-        if self.heatmap_enabled:
-            self.heatmap_legend.set_theme(self.keyboard_widget.current_theme_name)
-            self.heatmap_legend.setVisible(True)
-            self._update_heatmap_colors()
-        else:
-            self.heatmap_legend.setVisible(False)
-            self.keyboard_widget.update_colors({})
-
-    def _change_keyboard_theme(self, name):
-        self.settings.set("keyboard_theme", name)
-        self.keyboard_widget.set_theme(name)
-        self.heatmap_legend.set_theme(name)
-
-    def _toggle_incognito(self, state):
-        active = bool(state)
-        self.tracker.incognito_mode = active
-        self.set_incognito(active)
-        self.update_ui_stats()
-
-    def set_incognito(self, active):
-        self.incognito_active = active
-        self.header.is_incognito = active
-        if active:
-            self.incognito_overlay.setGeometry(self.centralWidget().rect())
-            self.incognito_overlay.activate()
-        else:
-            self.incognito_overlay.deactivate()
-
-    @pyqtSlot(bool)
-    def _do_set_incognito(self, active):
-        self.set_incognito(active)
-
-    def _toggle_overlay_check(self, state):
-        enabled = bool(state)
-        self.db.set_overlay_enabled(enabled)
-        if enabled:
-            if not self.overlay:
-                from overlay import FloatingOverlay
-                self.overlay = FloatingOverlay(parent_ui=self, settings=self.settings)
-                self.overlay.update_theme(self.current_tokens.accent, self.settings.get("theme") == "light")
-                self.overlay.show()
-        else:
-            if self.overlay:
-                self.overlay.close()
-                self.overlay = None
-
-    def toggle_overlay(self):
-        ch = self.settings_drawer.overlay_check
-        ch.setChecked(not ch.isChecked())
-
-    def _toggle_startup(self, state):
-        utils.set_startup(bool(state))
-
-    def _get_custom_profiles(self):
-        return [p for p in self.db.get_profiles() if p not in ("Total", "Desktop", "Gaming")]
-
-    def _update_chip_styles(self):
-        accent = self.current_tokens.accent
-        brd = self.current_tokens.border
-        ts = self.current_tokens.text_secondary
-        selected_style = f"background-color: rgba({int(accent[1:3],16)},{int(accent[3:5],16)},{int(accent[5:7],16)},0.15); border: 1px solid {accent}; color: {accent}; border-radius: 14px; padding: 0 14px; font-size: 13px;"
-        unselected_style = f"background-color: transparent; border: 1px solid {brd}; color: {ts}; border-radius: 14px; padding: 0 14px; font-size: 13px;"
-        for name, btn in self.chips.items():
-            if name == self.viewing_profile:
-                btn.setStyleSheet(selected_style)
-                btn.setChecked(True)
-            else:
-                btn.setStyleSheet(unselected_style)
-                btn.setChecked(False)
-
-    def update_profile_selector_ui(self):
-        self._update_chip_styles()
-        custom_profiles = self._get_custom_profiles()
-        self.profile_combobox.blockSignals(True)
-        self.profile_combobox.clear()
-        self.profile_combobox.addItems(custom_profiles)
-        if self.viewing_profile in ("Total", "Desktop", "Gaming"):
-            self.profile_combobox.setCurrentIndex(-1)
-            self.del_profile_btn.setVisible(False)
-        else:
-            idx = self.profile_combobox.findText(self.viewing_profile)
-            if idx >= 0:
-                self.profile_combobox.setCurrentIndex(idx)
-            self.del_profile_btn.setVisible(True)
-            if self.profile_btn_group.checkedButton():
-                self.profile_btn_group.setExclusive(False)
-                self.profile_btn_group.checkedButton().setChecked(False)
-                self.profile_btn_group.setExclusive(True)
-        self.profile_combobox.blockSignals(False)
-
-    def _on_profile_chip_clicked(self, name):
-        self._set_viewing_profile(name)
-
-    def _set_viewing_profile(self, name):
-        self.viewing_profile = name
-        self.update_profile_selector_ui()
-        self._update_heatmap_colors()
-        self.update_ui_stats()
-
-    def _on_custom_profile_selected(self, profile_name):
-        if not profile_name:
+            
+        if not keys_data:
+            self.heatmap.update_colors({})
+            self.heatmap.update()
             return
-        self._set_viewing_profile(profile_name)
+            
+        max_val = max(keys_data.values()) if keys_data else 1
+        target_colors = {}
+        for k, count in keys_data.items():
+            if count > 0:
+                norm = math.pow(count / max_val, 0.6)
+                target_colors[k] = self.heatmap._resolve_color(norm)
+        
+        self.heatmap.update_colors(target_colors)
+        self.heatmap.update()
 
-    def _create_profile_dialog(self):
-        from PyQt6.QtWidgets import QInputDialog
-        title = self.tr.t("add_profile") if self.tr else "Add Profile"
-        prompt = self.tr.t("add_profile_prompt") if self.tr else "Enter new profile name:"
-        name, ok = QInputDialog.getText(self, title, prompt)
-        if ok and name:
-            name = name.strip()
-            if self.db.create_profile(name):
-                self.viewing_profile = name
-                self.tracker.set_profile(name)
-                self.db.set_last_profile(name)
-                self.update_profile_selector_ui()
-                self._update_heatmap_colors()
-                self.update_ui_stats()
-            else:
-                QMessageBox.warning(self, "Error", "Profile already exists.")
+    def _update_telemetry(self):
+        agg_stats = self.db.get_aggregated_stats(self.current_profile)
+        keys_data = agg_stats.get("keys", {})
+        total_keys = sum(keys_data.values())
+        estimated_words = total_keys // 5
+        self.session_val.setText(f"{estimated_words:,}")
+        
+        raw_stats = self.db.get_stats_for_profile(self.current_profile)
+        hourly_data = raw_stats.get("hourly", {})
+        
+        peak_apm = 0
+        burst_records = raw_stats.get("burst_records", [])
+        if burst_records:
+            best_burst = max(burst_records, key=lambda x: x.get("peak_apm", 0))
+            peak_apm = best_burst.get("peak_apm", 0)
+            
+        if hasattr(self, "main_stats_lbl"):
+            self.main_stats_lbl.setText(f"APM: {peak_apm} | Parole: {estimated_words}")
+            
+        if keys_data:
+            top_key = max(keys_data.items(), key=lambda x: x[1])[0]
+            self.top_key_val.setText(str(top_key))
+        else:
+            self.top_key_val.setText("-")
+            
+        combos_data = agg_stats.get("combinations", {})
+        sorted_combos = sorted(combos_data.items(), key=lambda x: x[1], reverse=True)[:5]
+        self.combos_list.set_data(sorted_combos)
+        
+        bigrams_data = agg_stats.get("bigrams", {})
+        sorted_bigrams = sorted(bigrams_data.items(), key=lambda x: x[1], reverse=True)[:5]
+        self.bigrams_list.set_data(sorted_bigrams)
+            
+        raw_stats = self.db.get_stats_for_profile(self.current_profile)
+        hourly_data = raw_stats.get("hourly", {})
+        self.chart_widget.set_data(hourly_data)
+        
+        burst_records = raw_stats.get("burst_records", [])
+        if burst_records:
+            best_burst = max(burst_records, key=lambda x: x.get("peak_apm", 0))
+            p_apm = best_burst.get("peak_apm", 0)
+            p_dur = best_burst.get("duration", 0)
+            self.peak_val.setText(f"{p_apm} APM ({p_dur}s)")
+        else:
+            self.peak_val.setText("0 APM (0s)")
 
-    def _delete_active_profile(self):
-        profile = self.viewing_profile
-        if profile in ("Default", "Total", "Desktop", "Gaming"):
-            QMessageBox.warning(self, "Error", "Cannot delete default profiles.")
-            return
-        reply = QMessageBox.question(self, "Delete Profile", f"Delete '{profile}'?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
-            self.db.delete_profile(profile)
-            self.viewing_profile = "Default"
-            self.tracker.set_profile("Default")
-            self.db.set_last_profile("Default")
-            self.update_profile_selector_ui()
-            self._update_heatmap_colors()
-            self.update_ui_stats()
+    def closeEvent(self, event):
+        if getattr(self, "_force_quit", False):
+            if self.shutdown_callback:
+                self.shutdown_callback()
+            event.accept()
+        else:
+            self.hide()
+            event.ignore()
 
-    def trigger_profile_switch_animation(self, from_profile, to_profile):
-        self._trigger_profile_switch.emit(from_profile, to_profile)
-
-    @pyqtSlot(str, str)
-    def _do_profile_switch_animation(self, from_profile, to_profile):
-        if to_profile == "Gaming":
-            self.keyboard_widget.start_gaming_banner(from_profile)
-
-    def change_profile(self, profile_name):
-        self.update_ui_stats()
-
-    def update_incognito_ui_state(self, value):
-        self.settings_drawer.incognito_check.setChecked(value)
-        self._toggle_incognito(value)
-
-    def _open_mappings_dialog(self):
-        dialog = ProcessMappingDialog(self, self.db, tr=self.tr, tokens=self.current_tokens)
-        dialog.exec()
-
-    def _open_about_dialog(self):
-        dialog = AboutDialog(self, tr=self.tr, tokens=self.current_tokens)
-        dialog.exec()
-
-    def _open_export_dialog(self):
-        dialog = ExportDialog(self, db=self.db, viewing_profile=self.viewing_profile, tr=self.tr, tokens=self.current_tokens)
-        dialog.exec()
-
-    def _reset_statistics_dialog(self):
-        reply = QMessageBox.question(self, "Reset Profile", f"Reset statistics for '{self.viewing_profile}'?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
-            self.db.reset_profile_statistics(self.viewing_profile)
-            self._update_heatmap_colors()
-            self.update_ui_stats()
-
-    def withdraw_to_tray(self):
-        self.hide()
-
-    def restore_from_tray(self):
-        self.show()
-        self.raise_()
-        self.activateWindow()
-
-    def process_event_queue(self, event_queue):
-        self._event_queue = event_queue
-
-    def handle_thread_event(self, event_type, val):
-        try:
-            if event_type == "keystroke":
-                self.keyboard_widget.add_ripple(val)
-                self.update_ui_stats()
-            elif event_type == "incognito":
-                self.set_incognito(val)
-            elif event_type == "restore":
-                self.restore_from_tray()
-            elif event_type == "toggle_incognito":
-                self.tracker.toggle_incognito()
-            elif event_type == "toggle_overlay":
-                self.toggle_overlay()
-            elif event_type == "burst_detected":
-                self.update_ui_stats()
-            elif event_type == "profile_changed":
-                old_profile = self.viewing_profile
-                self.viewing_profile = val
-                self.update_profile_selector_ui()
-                self.trigger_profile_switch_animation(old_profile, val)
-                self.change_profile(val)
-            elif event_type == "exit":
-                if self.shutdown_callback:
-                    self.shutdown_callback(val)
-        except Exception as e:
-            logging.exception(f"Error handling thread event '{event_type}': {e}")
+    def process_event_queue(self, q=None):
+        if q is not None:
+            self.event_queue = q
 
     def mainloop(self):
         self.show()
-        self._qt_app.exec()
+        import sys
+        sys.exit(self._app.exec())
 
     def destroy(self):
-        self._qt_app.quit()
+        self.close()
 
-    def closeEvent(self, event):
-        event.ignore()
-        self.withdraw_to_tray()
-
-    def winfo_pointerx(self):
-        return QCursor.pos().x()
-
-    def winfo_pointery(self):
-        return QCursor.pos().y()
-
-    def winfo_rootx(self):
-        return self.mapToGlobal(self.rect().topLeft()).x()
-
-    def winfo_rooty(self):
-        return self.mapToGlobal(self.rect().topLeft()).y()
-
-    def winfo_width(self):
-        return self.width()
-
-    def winfo_height(self):
-        return self.height()
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    from database import Database
+    from tracker import KeystrokeTracker
+    db = Database()
+    tracker = KeystrokeTracker(db)
+    tracker.start()
+    ui = TypeTraceUI(db, tracker)
+    ui.show()
+    sys.exit(app.exec())

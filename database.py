@@ -7,7 +7,7 @@ DEFAULT_DATA = {
     "settings": {
         "startup": False,
         "last_profile": "Default",
-        "builtin_profiles": ["Total", "Desktop", "Gaming"],
+        "builtin_profiles": ["Total", "Desktop", "Gaming", "Default"],
         "recent_processes": []
     },
     "profiles": {
@@ -136,9 +136,9 @@ class Database:
         if "settings" not in self.data:
             self.data["settings"] = {}
         if "builtin_profiles" not in self.data["settings"] or not isinstance(self.data["settings"]["builtin_profiles"], list):
-            self.data["settings"]["builtin_profiles"] = ["Total", "Desktop", "Gaming"]
+            self.data["settings"]["builtin_profiles"] = ["Total", "Desktop", "Gaming", "Default"]
             
-        for p in ["Total", "Desktop", "Gaming"]:
+        for p in ["Total", "Desktop", "Gaming", "Default"]:
             if p not in self.data["profiles"]:
                 self.data["profiles"][p] = {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []}
             elif not isinstance(self.data["profiles"][p], dict):
@@ -162,7 +162,7 @@ class Database:
     def get_profiles(self):
         """Returns list of profile names, with built-ins first and excluding the hidden internal __all__ profile."""
         with self.lock:
-            builtins = ["Total", "Desktop", "Gaming"]
+            builtins = ["Total", "Desktop", "Gaming", "Default"]
             all_keys = list(self.data.get("profiles", {}).keys())
             customs = [p for p in all_keys if p not in builtins and p != "__all__"]
             existing_builtins = [p for p in builtins if p in all_keys]
@@ -229,7 +229,7 @@ class Database:
                     "bigrams": {},
                     "burst_records": []
                 }
-                if profile_name in ("Total", "Desktop", "Gaming"):
+                if profile_name in ("Total", "Desktop", "Gaming", "Default"):
                     self.data["profiles"][target]["is_builtin"] = True
                 self.save_data()
 
@@ -482,7 +482,7 @@ class Database:
 
     def get_builtin_profiles(self):
         """Returns the list of built-in profiles."""
-        return ["Total", "Desktop", "Gaming"]
+        return ["Total", "Desktop", "Gaming", "Default"]
 
     def get_recent_processes(self, limit=10):
         """Reads from settings['recent_processes'] list of dicts. Returns sorted by last_seen descending."""

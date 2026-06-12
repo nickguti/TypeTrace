@@ -13,69 +13,6 @@ from PyQt6.QtGui import (
 )
 
 
-class OverlayFieldConfigDialog(QDialog):
-    def __init__(self, parent_overlay):
-        super().__init__(parent_overlay)
-        self.parent_overlay = parent_overlay
-        self.setWindowTitle("Configure Overlay Fields")
-        self.setFixedSize(300, 320)
-        bg = parent_overlay._bg_color
-        text_c = parent_overlay._text_primary
-        accent_c = parent_overlay._accent_hex
-        self.setStyleSheet(f"background-color: {bg}; color: {text_c};")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(8)
-        title = QLabel("Select and reorder overlay fields:")
-        title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {text_c};")
-        layout.addWidget(title)
-        self.field_checks = {}
-        all_fields = ["apm", "wpm", "session", "profile", "top_key"]
-        labels = {"apm": "APM", "wpm": "WPM", "session": "Session Timer", "profile": "Active Profile", "top_key": "Top Key"}
-        current = parent_overlay._visible_fields[:]
-        for fid in current:
-            if fid in all_fields:
-                cb = QCheckBox(labels.get(fid, fid))
-                cb.setChecked(True)
-                layout.addWidget(cb)
-                self.field_checks[fid] = cb
-        for fid in all_fields:
-            if fid not in current:
-                cb = QCheckBox(labels.get(fid, fid))
-                cb.setChecked(False)
-                layout.addWidget(cb)
-                self.field_checks[fid] = cb
-        btn_row = QHBoxLayout()
-        up_btn = QPushButton("\u2191 Up")
-        up_btn.setFixedHeight(28)
-        up_btn.setStyleSheet(f"border: 1px solid #2F313D; color: {text_c}; background: transparent;")
-        btn_row.addWidget(up_btn)
-        down_btn = QPushButton("\u2193 Down")
-        down_btn.setFixedHeight(28)
-        down_btn.setStyleSheet(f"border: 1px solid #2F313D; color: {text_c}; background: transparent;")
-        btn_row.addWidget(down_btn)
-        layout.addLayout(btn_row)
-        apply_btn = QPushButton("Apply")
-        apply_btn.setFixedHeight(36)
-        apply_btn.setStyleSheet(f"border: 1px solid {accent_c}; color: {accent_c}; background: transparent; font-weight: bold;")
-        apply_btn.clicked.connect(self._apply)
-        layout.addWidget(apply_btn)
-        layout.addStretch()
-
-    def _apply(self):
-        selected = []
-        for fid, cb in self.field_checks.items():
-            if cb.isChecked():
-                selected.append(fid)
-        if not selected:
-            selected = ["apm"]
-        self.parent_overlay._visible_fields = selected
-        if self.parent_overlay._settings:
-            self.parent_overlay._settings.set("overlay_fields", selected)
-        self.parent_overlay._recalc_size()
-        self.parent_overlay.update()
-        self.accept()
-
 
 class FloatingOverlay(QWidget):
     def __init__(self, parent_ui=None, settings=None):
@@ -89,7 +26,7 @@ class FloatingOverlay(QWidget):
         self._text_secondary = "#8E9297"
         self._is_light = False
         if settings:
-            self._accent_hex = settings.get("accent_color")
+            self._accent_hex = settings.get("accent_color") or "#00F5D4"
             theme = settings.get("theme")
             if theme == "light":
                 self._is_light = True
@@ -116,19 +53,24 @@ class FloatingOverlay(QWidget):
         self._resize_start_pos = QPoint()
         self._resize_start_size = None
         self._grip_size = 14
+        self._scale = 1.0
+        if self._settings and self._settings.get("overlay_scale"):
+            self._scale = self._settings.get("overlay_scale")
         self._recalc_size()
         self._restore_position()
 
     def _recalc_size(self):
+        scale = getattr(self, '_scale', 1.0)
         row_h = 24
-        h = 16 + len(self._visible_fields) * row_h + 8
-        w = 200
+        logical_h = 16 + len(self._visible_fields) * row_h + 8
+        logical_w = 200
         if self._settings:
-            w = self._settings.get("overlay_width") or 200
+            stored_w = self._settings.get("overlay_width")
+            if stored_w: logical_w = max(logical_w, stored_w / scale)
             stored_h = self._settings.get("overlay_height")
-            if stored_h and stored_h > h:
-                h = stored_h
-        self.resize(max(w, 140), max(h, 50))
+            if stored_h and stored_h > (logical_h * scale):
+                logical_h = stored_h / scale
+        self.resize(max(int(logical_w * scale), int(140 * scale)), max(int(logical_h * scale), int(50 * scale)))
 
     def _restore_position(self):
         ox = None
@@ -139,10 +81,41 @@ class FloatingOverlay(QWidget):
         if ox is not None and oy is not None:
             self.move(int(ox), int(oy))
         else:
-            screen = self.screen()
+            from PyQt6.QtWidgets import QApplication
+            screen = QApplication.primaryScreen()
             if screen:
                 geo = screen.availableGeometry()
                 self.move(geo.right() - self.width() - 20, geo.bottom() - self.height() - 20)
+
+    def activate(self):
+        self.show()
+        self.raise_()
+
+    def deactivate(self):
+        self.hide()
+
+    def apply_settings(self):
+        if not self._settings:
+            return
+        show_apm = self._settings.get("overlay_show_apm") if self._settings.get("overlay_show_apm") is not None else True
+        show_wpm = self._settings.get("overlay_show_wpm") if self._settings.get("overlay_show_wpm") is not None else True
+        show_peak = self._settings.get("overlay_show_peak") if self._settings.get("overlay_show_peak") is not None else False
+        show_profile = self._settings.get("overlay_show_profile") if self._settings.get("overlay_show_profile") is not None else True
+        opacity = self._settings.get("overlay_opacity") if self._settings.get("overlay_opacity") is not None else 1.0
+        scale = self._settings.get("overlay_scale") if self._settings.get("overlay_scale") is not None else 1.0
+        
+        fields = []
+        if show_apm: fields.append("apm")
+        if show_wpm: fields.append("wpm")
+        if show_peak: fields.append("peak")
+        if show_profile: fields.append("profile")
+        
+        self._visible_fields = fields
+        self.setWindowOpacity(opacity)
+        self._scale = scale
+        
+        self._recalc_size()
+        self.update()
 
     def update_theme(self, accent_hex, is_light):
         self._accent_hex = accent_hex
@@ -179,19 +152,27 @@ class FloatingOverlay(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        scale = getattr(self, '_scale', 1.0)
+        painter.scale(scale, scale)
+        logical_w = self.width() / scale
+        logical_h = self.height() / scale
+
         bg = self._hex_to_qc(self._bg_color)
         bg.setAlpha(230)
         border_c = self._hex_to_qc(self._border_color)
         accent_c = self._hex_to_qc(self._accent_hex)
         text_c = self._hex_to_qc(self._text_primary)
         sec_c = self._hex_to_qc(self._text_secondary)
-        rect = QRectF(0, 0, self.width(), self.height())
+        
+        rect = QRectF(0, 0, logical_w, logical_h)
         path = QPainterPath()
         path.addRoundedRect(rect, 10, 10)
         painter.fillPath(path, bg)
         painter.setPen(QPen(border_c, 1.0))
         painter.drawPath(path)
-        field_labels = {"apm": "APM", "wpm": "WPM", "session": "SESSION", "profile": "PROFILE", "top_key": "TOP KEY"}
+        
+        field_labels = {"apm": "APM", "wpm": "WPM", "session": "SESSION", "profile": "PROFILE", "top_key": "TOP KEY", "peak": "PEAK APM"}
         y = 10
         row_h = 24
         for fid in self._visible_fields:
@@ -200,22 +181,25 @@ class FloatingOverlay(QWidget):
             painter.setPen(sec_c)
             font_label = QFont("Inter", 10)
             painter.setFont(font_label)
-            painter.drawText(QRectF(12, y, 70, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label_text)
+            painter.drawText(QRectF(12, y, 80, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label_text)
             painter.setPen(accent_c)
             font_val = QFont("Inter", 13, QFont.Weight.Bold)
             painter.setFont(font_val)
-            painter.drawText(QRectF(82, y, self.width() - 94, row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, value_text)
+            painter.drawText(QRectF(92, y, logical_w - 104, row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, value_text)
             y += row_h
-        grip_x = self.width() - self._grip_size
-        grip_y = self.height() - self._grip_size
+            
+        grip_x = logical_w - self._grip_size
+        grip_y = logical_h - self._grip_size
         painter.setPen(QPen(border_c, 1.5))
         for i in range(3):
             offset = 4 + i * 4
-            painter.drawLine(int(grip_x + offset), int(self.height() - 4), int(self.width() - 4), int(grip_y + offset))
+            painter.drawLine(int(grip_x + offset), int(logical_h - 4), int(logical_w - 4), int(grip_y + offset))
         painter.end()
 
     def _in_grip(self, pos):
-        return (pos.x() >= self.width() - self._grip_size and pos.y() >= self.height() - self._grip_size)
+        scale = getattr(self, '_scale', 1.0)
+        grip_phys = self._grip_size * scale
+        return (pos.x() >= self.width() - grip_phys and pos.y() >= self.height() - grip_phys)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -233,8 +217,9 @@ class FloatingOverlay(QWidget):
         local_pos = event.position().toPoint()
         if self._resizing:
             delta = event.globalPosition().toPoint() - self._resize_start_pos
-            new_w = max(140, self._resize_start_size.width() + delta.x())
-            new_h = max(50, self._resize_start_size.height() + delta.y())
+            scale = getattr(self, '_scale', 1.0)
+            new_w = max(140 * scale, self._resize_start_size.width() + delta.x())
+            new_h = max(50 * scale, self._resize_start_size.height() + delta.y())
             self.resize(int(new_w), int(new_h))
             event.accept()
         elif self._dragging:
@@ -262,13 +247,7 @@ class FloatingOverlay(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        configure_action = menu.addAction("Configure Fields\u2026")
         close_action = menu.addAction("Close Overlay")
         action = menu.exec(event.globalPos())
-        if action == configure_action:
-            dlg = OverlayFieldConfigDialog(self)
-            dlg.exec()
-        elif action == close_action:
-            self.hide()
-            if self._parent_ui and hasattr(self._parent_ui, 'overlay_check'):
-                self._parent_ui.overlay_check.setChecked(False)
+        if action == close_action:
+            self.deactivate()
