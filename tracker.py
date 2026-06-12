@@ -76,6 +76,7 @@ class KeystrokeTracker:
             "alt": False,
             "win": False
         }
+        self.pressed_keys = set()
         
         # Bigram tracking (last key pressed)
         self.last_key = None
@@ -198,6 +199,11 @@ class KeystrokeTracker:
     def on_press(self, key):
         """Callback invoked when a key is pressed."""
         try:
+            key_name = self.map_key_to_name(key)
+            if key_name in self.pressed_keys:
+                return
+            self.pressed_keys.add(key_name)
+            
             # 1. Update modifier states
             is_modifier = False
             if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
@@ -213,8 +219,6 @@ class KeystrokeTracker:
                 self.pressed_modifiers["win"] = True
                 is_modifier = True
                 
-            key_name = self.map_key_to_name(key)
-            
             # 2. Check for Global Hotkeys
             # Ctrl + Shift + I to toggle Incognito Mode
             if self.pressed_modifiers["ctrl"] and self.pressed_modifiers["shift"] and key_name == 'I':
@@ -285,6 +289,10 @@ class KeystrokeTracker:
     def on_release(self, key):
         """Callback invoked when a key is released."""
         try:
+            key_name = self.map_key_to_name(key)
+            if key_name in self.pressed_keys:
+                self.pressed_keys.remove(key_name)
+                
             if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
                 self.pressed_modifiers["ctrl"] = False
             elif key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r):

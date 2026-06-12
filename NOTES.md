@@ -169,3 +169,8 @@
 - Moved the Settings Drawer gear button completely out of the Dashboard layout and embedded it into `HeaderWidget`, placing it gracefully beside the Compact Mode button at the top right of the application.
 - Implemented `NoScrollComboBox` overriding `wheelEvent` to ignore scrolls. Applied this custom class to all Settings Drawer comboboxes so attempting to scroll through the Settings Drawer no longer accidentally changes configuration values.
 - Perfected theme synchronization by adding styling cascades for `self.heatmap_toggle`, `self.main_stats_lbl`, `self.settings_drawer`, `self.btn_close_drawer`, and the main `TypeTraceUI` body natively inside `_apply_theme`.
+
+## 2026-06-12 TRACKER
+- Added state tracking (`self.pressed_keys`) to ignore OS auto-repeat events when a key is held down.
+- Modified `__init__`, `on_press`, and `on_release` to enforce single physical press counts.
+- No new public attributes or methods that `ui.py` or `overlay.py` might need were exposed.
