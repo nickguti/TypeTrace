@@ -775,7 +775,8 @@ class KeyboardHeatmapWidget(QWidget):
             self.current_colors = {}
             self.transition_start = None
         else:
-            self.transition_start = QTime.currentTime()
+            if not self.transition_start:
+                self.transition_start = QTime.currentTime()
 
     def add_ripple(self, key_id):
         self.ripples.append({"key_id": key_id, "start_time": QTime.currentTime(), "duration_ms": 300})
@@ -1943,7 +1944,9 @@ class TypeTraceUI(QMainWindow):
         home_layout.setContentsMargins(20, 20, 20, 20)
         home_layout.setSpacing(15)
         
-        dash_layout = QHBoxLayout()
+        self.dash_widget = QWidget()
+        dash_layout = QHBoxLayout(self.dash_widget)
+        dash_layout.setContentsMargins(0, 0, 0, 0)
         self.main_stats_lbl = QLabel("APM: 0 | Parole: 0")
         self.main_stats_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
         dash_layout.addWidget(self.main_stats_lbl)
@@ -1953,7 +1956,7 @@ class TypeTraceUI(QMainWindow):
         self.heatmap_toggle.toggled.connect(self._on_heatmap_toggle)
         dash_layout.addWidget(self.heatmap_toggle)
         
-        home_layout.addLayout(dash_layout)
+        home_layout.addWidget(self.dash_widget)
         self.header.settings_btn.clicked.connect(self._toggle_settings_drawer)
         
         self.heatmap_container = QWidget()
@@ -2106,10 +2109,18 @@ class TypeTraceUI(QMainWindow):
         self.overlay.resize(self.size())
         
         self.sync_settings()
+        
+        self.compact_restore_btn = QPushButton("✖", self)
+        self.compact_restore_btn.setFixedSize(30, 30)
+        self.compact_restore_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.compact_restore_btn.clicked.connect(self.toggle_compact_mode)
+        self.compact_restore_btn.hide()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.overlay.resize(self.size())
+        if hasattr(self, "compact_restore_btn"):
+            self.compact_restore_btn.move(self.width() - 40, 10)
         if hasattr(self, "settings_drawer") and self.settings_drawer.isVisible():
             target_width = 380
             self.settings_drawer.setGeometry(self.width() - target_width, 0, target_width, self.height())
@@ -2603,6 +2614,8 @@ class TypeTraceUI(QMainWindow):
             self.settings_drawer.setStyleSheet(f"QScrollArea {{ background-color: {tokens.bg_panel}; border-left: 2px solid {tokens.border}; }}")
         if hasattr(self, "btn_close_drawer"):
             self.btn_close_drawer.setStyleSheet(f"background-color: transparent; color: {tokens.text_secondary}; border: none;")
+        if hasattr(self, "compact_restore_btn"):
+            self.compact_restore_btn.setStyleSheet(f"background-color: transparent; color: {tokens.text_secondary}; border: none; font-size: 16px; font-weight: bold;")
             
         self.setStyleSheet(f"TypeTraceUI {{ background-color: {tokens.bg_window}; }}")
         
@@ -2650,17 +2663,47 @@ class TypeTraceUI(QMainWindow):
     def toggle_compact_mode(self):
         self.is_compact = not self.is_compact
         self.settings_mgr.set("compact_mode", self.is_compact)
+        
         if self.is_compact:
-            self.header.setFixedHeight(40)
-            self.header.title_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
-            self.header.subtitle_lbl.hide()
+            self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+            self.header.hide()
+            self.tab_widget.tabBar().hide()
+            if hasattr(self, "dash_widget"):
+                self.dash_widget.hide()
             self.legend.hide()
+            if hasattr(self, "compact_restore_btn"):
+                self.compact_restore_btn.show()
+                self.compact_restore_btn.raise_()
+            self.setMinimumSize(400, 200)
+            self.resize(600, 250)
+            self.show()
         else:
-            self.header.setFixedHeight(80)
-            self.header.title_lbl.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
-            self.header.subtitle_lbl.show()
+            self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.FramelessWindowHint & ~Qt.WindowType.WindowStaysOnTopHint)
+            self.setMinimumSize(800, 500)
+            self.resize(900, 600)
+            self.header.show()
+            self.tab_widget.tabBar().show()
+            if hasattr(self, "dash_widget"):
+                self.dash_widget.show()
             if self.heatmap.heatmap_enabled:
                 self.legend.show()
+            if hasattr(self, "compact_restore_btn"):
+                self.compact_restore_btn.hide()
+            self.show()
+
+    def mousePressEvent(self, event):
+        if self.is_compact and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.is_compact and event.buttons() == Qt.MouseButton.LeftButton and hasattr(self, "_drag_pos"):
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
 
     def _on_tracker_event(self, event_type, value):
         self.event_queue.put((event_type, value))
@@ -2750,11 +2793,15 @@ class TypeTraceUI(QMainWindow):
             self.heatmap.update()
             return
             
-        max_val = max(keys_data.values()) if keys_data else 1
+        counts = sorted(keys_data.values())
+        idx = int(len(counts) * 0.95)
+        if idx >= len(counts): idx = len(counts) - 1
+        max_val = counts[idx] if counts and counts[idx] > 0 else 1
+        
         target_colors = {}
         for k, count in keys_data.items():
             if count > 0:
-                norm = math.pow(count / max_val, 0.6)
+                norm = min(1.0, math.pow(count / max_val, 0.6))
                 target_colors[k] = self.heatmap._resolve_color(norm)
         
         self.heatmap.update_colors(target_colors)

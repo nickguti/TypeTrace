@@ -174,3 +174,6 @@
 - Added state tracking (`self.pressed_keys`) to ignore OS auto-repeat events when a key is held down.
 - Modified `__init__`, `on_press`, and `on_release` to enforce single physical press counts.
 - No new public attributes or methods that `ui.py` or `overlay.py` might need were exposed.
+## 2026-06-13 BUGFIX: Heatmap Animation and Scale
+- Fixed update_colors in KeyboardHeatmapWidget to only reset 	ransition_start if it isn't currently animating, preventing stall on rapid typing.
+- Fixed _update_heatmap_colors outlier scaling issue by resolving max count against the 95th percentile, maintaining vibrant coloring.
