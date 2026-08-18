@@ -7,17 +7,15 @@ from database import Database
 
 class TestTypeTraceDatabase(unittest.TestCase):
     def setUp(self):
-        # Create a database with a separate test filename
+        # Database di prova in una cartella temporanea, non fra i dati utente
+        import tempfile
         self.test_filename = "test_typetrace_data.json"
-        self.db = Database(filepath=self.test_filename)
+        self.test_dir = tempfile.mkdtemp()
+        self.db = Database(filepath=self.test_filename, directory=self.test_dir)
         
     def tearDown(self):
-        # Clean up database file
-        if os.path.exists(self.db.filepath):
-            try:
-                os.remove(self.db.filepath)
-            except Exception:
-                pass
+        import shutil
+        shutil.rmtree(getattr(self, "test_dir", ""), ignore_errors=True)
                 
     def test_default_profile_initialization(self):
         """Verify that default profile is set up on init."""
@@ -134,7 +132,7 @@ class TestTypeTraceDatabase(unittest.TestCase):
             f.write("{ invalid json structure: [ ] ")
             
         # Re-initialize the database to trigger recovery logic
-        healed_db = Database(filepath=self.test_filename)
+        healed_db = Database(filepath=self.test_filename, directory=self.test_dir)
         
         # Verify database is recovered
         self.assertIn("Default", healed_db.get_profiles())

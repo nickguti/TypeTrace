@@ -1,7 +1,7 @@
 # Build output
 build/
 dist/
-*.spec
+# TypeTrace.spec e' la ricetta di build e va versionata
 
 # Python cache
 __pycache__/

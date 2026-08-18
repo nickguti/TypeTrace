@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import queue
+import re
 import webbrowser
 from dataclasses import dataclass, replace
 from PyQt6.QtWidgets import (
@@ -21,14 +22,16 @@ from PyQt6.QtGui import (
     QPainter, QColor, QFont, QPen, QBrush, QPainterPath,
     QLinearGradient, QRadialGradient, QCursor, QFontDatabase
 )
+import keymap
+import paths
 import utils
 
 class NoScrollComboBox(QComboBox):
     def wheelEvent(self, event):
         event.ignore()
 
-APP_VERSION = "2.1.0"
-APP_GITHUB = "https://github.com/nicolas/typetrace"
+APP_VERSION = "3.1.5"
+APP_GITHUB = "https://github.com/nickguti/TypeTrace"
 
 FONT_FAMILY = "Segoe UI Variable"
 
@@ -413,11 +416,15 @@ class SettingsManager:
         "overlay_show_apm": True,
         "overlay_show_wpm": True,
         "overlay_show_peak": False,
-        "overlay_show_profile": True
+        "overlay_show_profile": True,
+        "keyboard_layout": "100%",
+        "auto_switch": True,
+        "overlay_enabled": False
     }
 
     def __init__(self):
-        self._path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+        # In %APPDATA%: la cartella del modulo, sotto PyInstaller, e' temporanea
+        self._path = paths.migrate_legacy_file("settings.json")
         self._data = self.DEFAULTS.copy()
         if os.path.exists(self._path):
             try:
@@ -447,7 +454,8 @@ class Translator:
     def __init__(self, lang_code: str):
         self._lang_code = lang_code
         self._dict = {}
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lang.json")
+        # Risorsa di sola lettura: va cercata nel bundle, non fra i dati utente
+        path = paths.resource_path("lang.json")
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -512,7 +520,7 @@ class HeaderWidget(QWidget):
         self.settings_btn = QPushButton("⚙️")
         self.settings_btn.setFixedSize(32, 32)
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.settings_btn.setToolTip("Impostazioni")
+        self.settings_btn.setToolTip(self.tr.t("settings") if self.tr else "Settings")
         layout.addWidget(self.settings_btn)
 
     def set_tokens(self, tokens: ThemeTokens):
@@ -686,8 +694,8 @@ class LegendBarWidget(QWidget):
         painter.drawPath(path)
         painter.setPen(hex_to_qcolor(self.tokens.text_secondary))
         painter.setFont(QFont(FONT_FAMILY, 10))
-        lbl_low = self.tr.t("Less") if self.tr else "Less"
-        lbl_high = self.tr.t("More") if self.tr else "More"
+        lbl_low = self.tr.t("cold") if self.tr else "Less"
+        lbl_high = self.tr.t("hot") if self.tr else "More"
         painter.drawText(QRectF(x - 50, y - 5, 40, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, lbl_low)
         painter.drawText(QRectF(x + bar_w + 10, y - 5, 40, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lbl_high)
         painter.end()
@@ -739,7 +747,7 @@ class KeyboardHeatmapWidget(QWidget):
         w = self.width()
         h = self.height()
         if w <= 0 or h <= 0:
-            return QRectF(0, 0, 0, 0), 1.10, "100%"
+            return QRectF(0, 0, 0, 0), 1.10, "100%", 1.06
             
         fmt = "100%"
         if self.parent_ui:
@@ -755,6 +763,10 @@ class KeyboardHeatmapWidget(QWidget):
         else:
             ar = 3.6
             max_rx = 0.88
+
+        # L'ultima fila arriva a ry + rh = 1.06: normalizzando su 1.0 la riga
+        # dello spazio veniva tagliata del 6%.
+        max_ry = 1.06
         
         current_ratio = w / h
         if current_ratio > ar:
@@ -767,7 +779,7 @@ class KeyboardHeatmapWidget(QWidget):
             draw_h = draw_w / ar
             offset_x = 0.0
             offset_y = (h - draw_h) / 2.0
-        return QRectF(offset_x, offset_y, draw_w, draw_h), max_rx, fmt
+        return QRectF(offset_x, offset_y, draw_w, draw_h), max_rx, fmt, max_ry
 
     def update_colors(self, color_map):
         self.target_colors = color_map
@@ -779,6 +791,16 @@ class KeyboardHeatmapWidget(QWidget):
                 self.transition_start = QTime.currentTime()
 
     def add_ripple(self, key_id):
+        """Accoda l'animazione di un tasto premuto.
+
+        La lista veniva ripulita solo durante il disegno: con la finestra
+        ridotta a icona paintEvent non viene mai chiamato e la lista cresceva
+        di un elemento per ogni tasto, per tutta la sessione.
+        """
+        if not self.isVisible():
+            return
+        if len(self.ripples) > 64:
+            del self.ripples[:-32]
         self.ripples.append({"key_id": key_id, "start_time": QTime.currentTime(), "duration_ms": 300})
 
     def get_current_key_color(self, key_id):
@@ -803,7 +825,7 @@ class KeyboardHeatmapWidget(QWidget):
         bg_color = hex_to_qcolor(self.tokens.bg_window)
         painter.fillRect(self.rect(), bg_color)
         
-        draw_rect, max_rx, fmt = self._compute_draw_rect()
+        draw_rect, max_rx, fmt, max_ry = self._compute_draw_rect()
         if draw_rect.width() < 50 or draw_rect.height() < 20:
             painter.end()
             return
@@ -851,9 +873,9 @@ class KeyboardHeatmapWidget(QWidget):
                 continue
             key_id = key["id"]
             px = draw_rect.x() + (key["rx"] / max_rx) * draw_rect.width()
-            py = draw_rect.y() + key["ry"] * draw_rect.height()
+            py = draw_rect.y() + (key["ry"] / max_ry) * draw_rect.height()
             pw = (key["rw"] / max_rx) * draw_rect.width()
-            ph = key["rh"] * draw_rect.height()
+            ph = (key["rh"] / max_ry) * draw_rect.height()
             key_rect = QRectF(px + 1.5, py + 1.5, pw - 3, ph - 3)
             radius = ph * 0.15
             base_color = self.get_current_key_color(key_id)
@@ -891,7 +913,9 @@ class KeyboardHeatmapWidget(QWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawRoundedRect(shadow_rect, radius, radius)
                 
-                top_color = QColor("#1E2130")
+                # Prima era una tinta fissa scura: copriva il colore della
+                # heatmap e in tema chiaro dava una tastiera nera su fondo bianco.
+                top_color = hex_to_qcolor(self.tokens.key_cold)
                 painter.setBrush(QBrush(top_color))
                 if key_id == self._hovered_key_id:
                     painter.setPen(hover_pen)
@@ -989,16 +1013,20 @@ class KeyboardHeatmapWidget(QWidget):
             return
 
         pos = event.position()
-        draw_rect, max_rx, fmt = self._compute_draw_rect()
+        draw_rect, max_rx, fmt, max_ry = self._compute_draw_rect()
         found_key = None
-        
+
         for key in KEYBOARD_LAYOUT:
             if fmt == "TKL" and key["rx"] > 0.86:
                 continue
+            # Anche il rilevamento del passaggio del mouse deve saltare i tasti
+            # nascosti, altrimenti compaiono tooltip di tasti non disegnati.
+            if fmt == "60%" and (key["ry"] < 0.1 or key["rx"] > 0.71):
+                continue
             px = draw_rect.x() + (key["rx"] / max_rx) * draw_rect.width()
-            py = draw_rect.y() + key["ry"] * draw_rect.height()
+            py = draw_rect.y() + (key["ry"] / max_ry) * draw_rect.height()
             pw = (key["rw"] / max_rx) * draw_rect.width()
-            ph = key["rh"] * draw_rect.height()
+            ph = (key["rh"] / max_ry) * draw_rect.height()
             key_rect = QRectF(px, py, pw, ph)
             if key_rect.contains(pos):
                 found_key = key
@@ -1013,9 +1041,11 @@ class KeyboardHeatmapWidget(QWidget):
                 if not profile:
                     profile = "Default"
                 
-                key_data = self.parent_ui.db.get_key_stats(profile, key_id)
+                # Il database conosce il tasto con il nome del tracker
+                stored_key = keymap.key_for_layout(key_id)
+                key_data = self.parent_ui.db.get_key_stats(profile, stored_key)
                 count = key_data.get("total", 0)
-                
+
                 agg_stats = self.parent_ui.db.get_aggregated_stats(profile)
                 all_keys = agg_stats.get("keys", {})
                 
@@ -1027,7 +1057,7 @@ class KeyboardHeatmapWidget(QWidget):
                     sorted_keys = sorted(all_keys.items(), key=lambda x: x[1], reverse=True)
                     rank_idx = -1
                     for i, (k, c) in enumerate(sorted_keys):
-                        if k == key_id:
+                        if k == stored_key:
                             rank_idx = i + 1
                             break
                             
@@ -1184,6 +1214,16 @@ class ModernSwitch(QCheckBox):
         self._anim.stop()
         self._anim.setEndValue(1.0 if self.isChecked() else 0.0)
         self._anim.start()
+
+    def sync_thumb(self):
+        """Allinea il pallino allo stato senza animazione.
+
+        Serve dopo un setChecked() a segnali bloccati, che non fa scattare
+        _on_state_change e lasciava il pallino nella posizione di "spento".
+        """
+        self._anim.stop()
+        self._thumb_pos = 1.0 if self.isChecked() else 0.0
+        self.update()
 
     def sizeHint(self):
         return QSize(44, 24)
@@ -1599,7 +1639,6 @@ class ExportDialog(QDialog):
         dest = self.dest_entry.text().strip()
         if not dest:
             return
-        os.makedirs(dest, exist_ok=True)
         fmt_id = self.fmt_group.checkedId()
         profiles_to_export = []
         if self.scope_all.isChecked():
@@ -1607,6 +1646,10 @@ class ExportDialog(QDialog):
         else:
             profiles_to_export = [self._profile]
         try:
+            # Dentro il try: un percorso non valido finiva in eccezione fino
+            # allo slot Qt invece che nell'etichetta di errore qui sotto.
+            os.makedirs(dest, exist_ok=True)
+            failures = []
             for pname in profiles_to_export:
                 aggregated = self._db.get_aggregated_stats(pname)
                 export_data = {"keys": aggregated.get("keys", {}), "combinations": aggregated.get("combinations", {})}
@@ -1617,14 +1660,23 @@ class ExportDialog(QDialog):
                 if self.inc_history.isChecked():
                     profile_data = self._db.get_stats_for_profile(pname)
                     export_data["hourly"] = profile_data.get("hourly", {})
-                safe_name = pname.replace(" ", "_").lower()
+                # Il nome del profilo finisce in un nome di file: va ripulito
+                safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", pname).lower() or "profile"
                 if fmt_id == 0 or fmt_id == 2:
                     csv_path = os.path.join(dest, f"typetrace_{safe_name}.csv")
-                    utils.export_stats_to_csv(csv_path, export_data)
+                    # L'esito veniva ignorato: una scrittura fallita mostrava
+                    # comunque il messaggio di successo.
+                    if not utils.export_stats_to_csv(csv_path, export_data):
+                        failures.append(os.path.basename(csv_path))
                 if fmt_id == 1 or fmt_id == 2:
                     json_path = os.path.join(dest, f"typetrace_{safe_name}.json")
                     with open(json_path, "w", encoding="utf-8") as f:
                         json.dump(export_data, f, indent=4)
+            if failures:
+                err_text = self._tr.t("export_error") if self._tr else "\u2717 Error:"
+                self.status_lbl.setText(f"{err_text} {', '.join(failures)}")
+                self.status_lbl.setStyleSheet("color: #FF3B3B; font-size: 12px;")
+                return
             success_text = self._tr.t("export_success") if self._tr else "\u2713 Exported to"
             self.status_lbl.setText(f"{success_text} {dest}")
             self.status_lbl.setStyleSheet(f"color: {self.tokens.accent}; font-size: 12px;")
@@ -1907,17 +1959,38 @@ class TypeTraceUI(QMainWindow):
         self._init_ui()
         self._apply_theme(self.current_tokens)
         
+        # La modalita' compatta veniva letta dalle impostazioni ma mai
+        # applicata: il pulsante restava invertito finche' non lo si premeva
+        # due volte. Si applica dopo la costruzione della finestra.
+        if self.is_compact:
+            self.is_compact = False
+            QTimer.singleShot(0, self.toggle_compact_mode)
+
+        # L'overlay flottante ricorda se era aperto
+        if self.settings_mgr.get("overlay_enabled"):
+            QTimer.singleShot(300, self._on_overlay_toggle)
+
         if not self.settings_mgr.get("welcome_shown"):
             QTimer.singleShot(500, self._show_welcome)
 
     def _show_welcome(self):
         dlg = WelcomeDialog(self, self.tr, self.current_tokens)
-        dlg.exec()
+        result = dlg.exec()
+
+        # Chiudere la procedura guidata con Esc non deve creare nulla
+        if result != QDialog.DialogCode.Accepted:
+            self.settings_mgr.set("welcome_shown", True)
+            return
+
         pname = dlg.get_profile_name()
-        if pname not in self.db.get_profiles() and pname != "Total":
-            self.db.add_profile(pname)
-            self.profile_combo.addItem(pname)
-            self.profile_combo.setCurrentText(pname)
+        if pname and pname not in self.db.get_profiles() and pname != "Total":
+            # Il metodo si chiama create_profile: add_profile non e' mai esistito
+            if self.db.create_profile(pname):
+                self.profile_combo.addItem(pname)
+                self.profile_combo.setCurrentText(pname)
+            else:
+                QMessageBox.warning(self, self.tr.t("error"),
+                                    self.tr.t("profile_exists"))
         self.settings_mgr.set("welcome_shown", True)
 
     def _init_ui(self):
@@ -1947,11 +2020,11 @@ class TypeTraceUI(QMainWindow):
         self.dash_widget = QWidget()
         dash_layout = QHBoxLayout(self.dash_widget)
         dash_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_stats_lbl = QLabel("APM: 0 | Parole: 0")
+        self.main_stats_lbl = QLabel("APM: 0 | WPM: 0")
         self.main_stats_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
         dash_layout.addWidget(self.main_stats_lbl)
         dash_layout.addStretch()
-        dash_layout.addWidget(QLabel("Mostra Heatmap"))
+        dash_layout.addWidget(QLabel(self.tr.t("heatmap_view")))
         self.heatmap_toggle = ModernSwitch()
         self.heatmap_toggle.toggled.connect(self._on_heatmap_toggle)
         dash_layout.addWidget(self.heatmap_toggle)
@@ -1995,7 +2068,7 @@ class TypeTraceUI(QMainWindow):
         sc_layout = QVBoxLayout(self.session_card)
         sc_lbl = QLabel(self.tr.t("telemetry_session") if self.tr else "Estimated Words")
         sc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
-        sc_sub = QLabel("Totale parole stimate (tasti / 5)")
+        sc_sub = QLabel(self.tr.t("telemetry_session_desc"))
         sc_sub.setFont(QFont(FONT_FAMILY, 10))
         sc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
         self.telemetry_sub_labels.append(sc_sub)
@@ -2010,9 +2083,9 @@ class TypeTraceUI(QMainWindow):
         
         self.peak_card = MiniCard()
         pc_layout = QVBoxLayout(self.peak_card)
-        pc_lbl = QLabel("Fastest Burst")
+        pc_lbl = QLabel(self.tr.t("telemetry_burst"))
         pc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
-        pc_sub = QLabel("Record APM (tracciato nel database)")
+        pc_sub = QLabel(self.tr.t("telemetry_burst_desc"))
         pc_sub.setFont(QFont(FONT_FAMILY, 10))
         pc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
         self.telemetry_sub_labels.append(pc_sub)
@@ -2027,9 +2100,9 @@ class TypeTraceUI(QMainWindow):
         
         self.top_key_card = MiniCard()
         tkc_layout = QVBoxLayout(self.top_key_card)
-        tkc_lbl = QLabel("Most Used Key")
+        tkc_lbl = QLabel(self.tr.t("telemetry_topkey"))
         tkc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
-        tkc_sub = QLabel("Tasto più premuto in assoluto")
+        tkc_sub = QLabel(self.tr.t("telemetry_topkey_desc"))
         tkc_sub.setFont(QFont(FONT_FAMILY, 10))
         tkc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
         self.telemetry_sub_labels.append(tkc_sub)
@@ -2047,9 +2120,9 @@ class TypeTraceUI(QMainWindow):
         
         self.chart_card = MiniCard()
         cc_layout = QVBoxLayout(self.chart_card)
-        cc_lbl = QLabel("Activity Timeline")
+        cc_lbl = QLabel(self.tr.t("tab_chart"))
         cc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
-        cc_sub = QLabel("Eventi orari")
+        cc_sub = QLabel(self.tr.t("telemetry_chart_desc"))
         cc_sub.setFont(QFont(FONT_FAMILY, 10))
         cc_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
         self.telemetry_sub_labels.append(cc_sub)
@@ -2066,9 +2139,9 @@ class TypeTraceUI(QMainWindow):
         
         self.combos_card = MiniCard()
         cb_layout = QVBoxLayout(self.combos_card)
-        cb_lbl = QLabel("Top Combinations")
+        cb_lbl = QLabel(self.tr.t("top_combos"))
         cb_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
-        cb_sub = QLabel("Scorciatoie più usate")
+        cb_sub = QLabel(self.tr.t("telemetry_combos_desc"))
         cb_sub.setFont(QFont(FONT_FAMILY, 10))
         cb_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
         self.telemetry_sub_labels.append(cb_sub)
@@ -2081,9 +2154,9 @@ class TypeTraceUI(QMainWindow):
         
         self.bigrams_card = MiniCard()
         bg_layout = QVBoxLayout(self.bigrams_card)
-        bg_lbl = QLabel("Top Bigrams")
+        bg_lbl = QLabel(self.tr.t("top_bigrams"))
         bg_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
-        bg_sub = QLabel("Coppie di tasti")
+        bg_sub = QLabel(self.tr.t("telemetry_bigrams_desc"))
         bg_sub.setFont(QFont(FONT_FAMILY, 10))
         bg_sub.setStyleSheet(f"color: {self.current_tokens.text_secondary};")
         self.telemetry_sub_labels.append(bg_sub)
@@ -2140,7 +2213,7 @@ class TypeTraceUI(QMainWindow):
         
         drawer_top_bar = QHBoxLayout()
         drawer_top_bar.addStretch()
-        btn_close_drawer = QPushButton("❌ Chiudi")
+        btn_close_drawer = QPushButton("\u2716 " + self.tr.t("overlay_close"))
         btn_close_drawer.setFont(QFont(FONT_FAMILY, 10, QFont.Weight.Bold))
         btn_close_drawer.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close_drawer.clicked.connect(self._toggle_settings_drawer)
@@ -2239,25 +2312,48 @@ class TypeTraceUI(QMainWindow):
         data_layout.addWidget(data_lbl)
         
         prof_row = QHBoxLayout()
-        prof_row.addWidget(QLabel("Active Profile:"))
+        prof_row.addWidget(QLabel(self.tr.t("select_profile")))
         self.profile_combo = NoScrollComboBox()
-        self.profile_combo.setMinimumWidth(200)
+        self.profile_combo.setMinimumWidth(160)
         self.profile_combo.addItems(self.db.get_profiles())
         self.profile_combo.setCurrentText(self.current_profile)
         self.profile_combo.currentTextChanged.connect(self._on_profile_changed_ui)
         prof_row.addWidget(self.profile_combo)
+
+        # create_profile e delete_profile esistevano nel database ma nessun
+        # elemento dell'interfaccia li raggiungeva: i profili personalizzati
+        # erano di fatto impossibili da creare.
+        self.add_profile_btn = QPushButton("+")
+        self.add_profile_btn.setFixedWidth(32)
+        self.add_profile_btn.setToolTip(self.tr.t("add_profile"))
+        self.add_profile_btn.clicked.connect(self._add_profile)
+        prof_row.addWidget(self.add_profile_btn)
+
+        self.del_profile_btn = QPushButton("\u2212")
+        self.del_profile_btn.setFixedWidth(32)
+        self.del_profile_btn.setToolTip(self.tr.t("confirm_delete_title"))
+        self.del_profile_btn.clicked.connect(self._delete_profile)
+        prof_row.addWidget(self.del_profile_btn)
         prof_row.addStretch()
         data_layout.addLayout(prof_row)
+
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(QLabel(self.tr.t("auto_switch")))
+        auto_row.addStretch()
+        self.auto_switch_cb = ModernSwitch()
+        self.auto_switch_cb.toggled.connect(self._on_auto_switch_change)
+        auto_row.addWidget(self.auto_switch_cb)
+        data_layout.addLayout(auto_row)
         
-        self.smart_map_btn = QPushButton("Configure Auto-Switch")
+        self.smart_map_btn = QPushButton(self.tr.t("auto_switch"))
         self.smart_map_btn.clicked.connect(self._open_smart_map)
         data_layout.addWidget(self.smart_map_btn)
         
-        self.export_btn = QPushButton("Export Data...")
+        self.export_btn = QPushButton(self.tr.t("export"))
         self.export_btn.clicked.connect(self._open_export)
         data_layout.addWidget(self.export_btn)
         
-        self.reset_btn = QPushButton("Reset Profile Stats")
+        self.reset_btn = QPushButton(self.tr.t("reset"))
         self.reset_btn.setStyleSheet("color: #FF3B3B; font-weight: bold;")
         self.reset_btn.clicked.connect(self._reset_stats)
         data_layout.addWidget(self.reset_btn)
@@ -2284,7 +2380,7 @@ class TypeTraceUI(QMainWindow):
         layout.setSpacing(20)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
-        self.btn_toggle_overlay = QPushButton("Mostra Widget Fluttuante")
+        self.btn_toggle_overlay = QPushButton(self.tr.t("overlay_show"))
         self.btn_toggle_overlay.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
         self.btn_toggle_overlay.clicked.connect(self._on_overlay_toggle)
         layout.addWidget(self.btn_toggle_overlay)
@@ -2374,14 +2470,23 @@ class TypeTraceUI(QMainWindow):
             self.floating_overlay.apply_settings()
         if self.floating_overlay.isVisible():
             self.floating_overlay.deactivate()
-            self.btn_toggle_overlay.setText("Mostra Widget Fluttuante")
+            self.btn_toggle_overlay.setText(self.tr.t("overlay_show"))
+            self.settings_mgr.set("overlay_enabled", False)
         else:
+            # Il tema puo' essere cambiato dopo la creazione dell'overlay
+            self.floating_overlay.update_theme(self.current_tokens.accent, not self.is_dark_mode)
             self.floating_overlay.activate()
-            self.btn_toggle_overlay.setText("Nascondi Widget Fluttuante")
+            self.btn_toggle_overlay.setText(self.tr.t("overlay_hide"))
+            self.settings_mgr.set("overlay_enabled", True)
 
     def sync_settings(self):
         mgr = self.settings_mgr
-        
+
+        self.auto_switch_cb.blockSignals(True)
+        self.auto_switch_cb.setChecked(bool(mgr.get("auto_switch")))
+        self.tracker.auto_switch_enabled = bool(mgr.get("auto_switch"))
+        self.auto_switch_cb.blockSignals(False)
+
         self.theme_combo.blockSignals(True)
         self.lang_combo.blockSignals(True)
         self.compact_cb.blockSignals(True)
@@ -2419,6 +2524,13 @@ class TypeTraceUI(QMainWindow):
         self.overlay_show_profile.setChecked(mgr.get("overlay_show_profile"))
         self.overlay_opacity_slider.setValue(int(mgr.get("overlay_opacity") * 100))
         self.overlay_scale_slider.setValue(int(mgr.get("overlay_scale") * 100))
+
+        # setChecked() a segnali bloccati non fa scattare l'animazione: il
+        # pallino restava a sinistra su ogni interruttore acceso all'avvio.
+        for switch in (self.compact_cb, self.startup_cb, self.overlay_show_apm,
+                       self.overlay_show_wpm, self.overlay_show_peak,
+                       self.overlay_show_profile, self.auto_switch_cb):
+            switch.sync_thumb()
         
         self.theme_combo.blockSignals(False)
         self.lang_combo.blockSignals(False)
@@ -2434,6 +2546,11 @@ class TypeTraceUI(QMainWindow):
         self.overlay_show_profile.blockSignals(False)
         self.overlay_opacity_slider.blockSignals(False)
         self.overlay_scale_slider.blockSignals(False)
+
+    def _on_auto_switch_change(self, checked):
+        """Attiva o disattiva il cambio automatico di profilo."""
+        self.settings_mgr.set("auto_switch", bool(checked))
+        self.tracker.auto_switch_enabled = bool(checked)
 
     def _on_kb_layout_change(self, text):
         self.settings_mgr.set("keyboard_layout", text)
@@ -2492,13 +2609,26 @@ class TypeTraceUI(QMainWindow):
             self.settings_mgr.set("keyboard_style", text)
             self.heatmap.update()
 
+    def _startup_command(self):
+        """Comando che Windows deve eseguire all'accesso.
+
+        Prima veniva registrato sys.argv[0]: da sorgente e' il percorso di
+        main.py, che Windows non sa avviare da solo.
+        """
+        if getattr(sys, "frozen", False):
+            return f'"{sys.executable}"'
+        script = os.path.join(paths.bundle_dir(), "main.py")
+        interpreter = sys.executable.replace("python.exe", "pythonw.exe")
+        if not os.path.exists(interpreter):
+            interpreter = sys.executable
+        return f'"{interpreter}" "{script}"'
+
     def _on_startup_change(self, checked):
         try:
             import winreg
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
             if checked:
-                exe_path = os.path.abspath(sys.argv[0])
-                winreg.SetValueEx(key, "TypeTrace", 0, winreg.REG_SZ, f'"{exe_path}"')
+                winreg.SetValueEx(key, "TypeTrace", 0, winreg.REG_SZ, self._startup_command())
             else:
                 try:
                     winreg.DeleteValue(key, "TypeTrace")
@@ -2515,6 +2645,41 @@ class TypeTraceUI(QMainWindow):
             if hasattr(self, "change_accent_color"):
                 self.change_accent_color(hex_c)
 
+    def _add_profile(self):
+        """Crea un nuovo profilo e lo rende quello attivo."""
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, self.tr.t("add_profile"),
+                                        self.tr.t("add_profile_prompt"))
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if not self.db.create_profile(name):
+            QMessageBox.warning(self, self.tr.t("error"), self.tr.t("profile_exists"))
+            return
+        self.profile_combo.addItem(name)
+        self.profile_combo.setCurrentText(name)
+
+    def _delete_profile(self):
+        """Elimina il profilo selezionato, se non e' uno di quelli protetti."""
+        name = self.profile_combo.currentText()
+        if name in self.db.get_builtin_profiles():
+            QMessageBox.information(self, self.tr.t("error"),
+                                    self.tr.t("cannot_delete_protected"))
+            return
+        reply = QMessageBox.question(
+            self, self.tr.t("confirm_delete_title"),
+            self.tr.t("confirm_delete_body").replace("{name}", name),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if self.db.delete_profile(name):
+            index = self.profile_combo.findText(name)
+            if index >= 0:
+                self.profile_combo.removeItem(index)
+            self.profile_combo.setCurrentText("Total")
+
     def _open_smart_map(self):
         d = ProcessMappingDialog(self, self.db, self.tr, self.current_tokens)
         d.exec()
@@ -2527,7 +2692,9 @@ class TypeTraceUI(QMainWindow):
         prof = self.current_profile
         reply = QMessageBox.question(self, "Reset Stats", f"Are you sure you want to reset all stats for profile '{prof}'?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
-            self.db.reset_profile(prof)
+            # Il metodo si chiama reset_profile_statistics
+            self.db.reset_profile_statistics(prof)
+            self.db.save_data()
             self._request_full_update()
 
     def _apply_theme(self, tokens: ThemeTokens):
@@ -2633,6 +2800,17 @@ class TypeTraceUI(QMainWindow):
         if is_dark == self.is_dark_mode:
             return
             
+        # Un secondo cambio di tema riassegnava questi attributi: l'animazione
+        # precedente veniva raccolta dal garbage collector senza emettere
+        # finished, e la sua istantanea restava sopra l'interfaccia per sempre.
+        old_label = getattr(self, "transition_label", None)
+        if old_label is not None:
+            try:
+                old_label.deleteLater()
+            except RuntimeError:
+                pass
+            self.transition_label = None
+
         self.transition_pixmap = self.grab()
         self.transition_label = QLabel(self)
         self.transition_label.setPixmap(self.transition_pixmap)
@@ -2714,7 +2892,7 @@ class TypeTraceUI(QMainWindow):
             try:
                 ev_type, val = self.event_queue.get_nowait()
                 if ev_type == "keystroke":
-                    self.heatmap.add_ripple(val)
+                    self.heatmap.add_ripple(keymap.layout_for_key(val))
                     needs_heatmap_update = True
                 elif ev_type == "incognito":
                     self.header.is_incognito = val
@@ -2724,33 +2902,60 @@ class TypeTraceUI(QMainWindow):
                         self.overlay.deactivate()
                     self.header.update_stats(self.header.apm, self.header.wpm, self.header.is_tracking)
                 elif ev_type == "toggle_overlay":
-                    pass 
+                    # Era un ramo vuoto: la scorciatoia non faceva nulla
+                    self._on_overlay_toggle()
+                elif ev_type == "toggle_incognito":
+                    # Inviato dal menu dell'icona nell'area di notifica. Senza
+                    # questo ramo l'evento veniva scartato in silenzio e la
+                    # modalita' incognito era irraggiungibile.
+                    self.tracker.toggle_incognito()
                 elif ev_type == "restore":
-                    self.show()
+                    self.showNormal()
+                    self.raise_()
                     self.activateWindow()
                 elif ev_type == "exit":
                     self._force_quit = True
                     self.close()
                 elif ev_type == "profile_changed":
-                    if self.profile_combo.currentText() != val:
-                        self.profile_combo.setCurrentText(val)
+                    # Il banner va deciso prima di toccare il menu: impostarne
+                    # il testo emette currentTextChanged, che aggiornava
+                    # current_profile rendendo il confronto sempre falso.
                     if val != self.current_profile:
                         self.heatmap.start_gaming_banner(self.current_profile)
+                    if self.profile_combo.currentText() != val:
+                        self.profile_combo.blockSignals(True)
+                        self.profile_combo.setCurrentText(val)
+                        self.profile_combo.blockSignals(False)
                     self.current_profile = val
                     self._request_full_update()
                 elif ev_type == "burst_detected":
                     peak, dur = val
-                    txt = f"{peak} APM ({dur:.1f}s)"
-                    self.burst_val.setText(txt)
+                    # L'attributo si chiama peak_val: burst_val non e' mai
+                    # esistito e ogni burst finiva in eccezione.
+                    self.peak_val.setText(f"{peak} APM ({dur:.1f}s)")
             except queue.Empty:
                 break
         
         apm, wpm = self.tracker.get_apm_wpm()
         is_tracking = not getattr(self.tracker, "incognito_mode", False)
         self.header.update_stats(apm, wpm, is_tracking)
+
+        # L'etichetta della Home mostrava il record storico dei burst sotto la
+        # scritta "APM", e si aggiornava solo passando dalla Telemetria.
+        if hasattr(self, "main_stats_lbl"):
+            self.main_stats_lbl.setText(
+                f"{self.tr.t('apm_live')}: {apm} | {self.tr.t('words')}: {wpm}")
         
         if hasattr(self, "floating_overlay") and self.floating_overlay.isVisible():
-            self.floating_overlay.update_data(apm, wpm, "00:00:00", self.current_profile, "Space (0%)")
+            # Prima venivano passati valori fissi: sessione a "00:00:00" e
+            # tasto piu' usato sempre "Space (0%)".
+            self.floating_overlay.update_data(
+                apm, wpm,
+                self.tracker.get_session_duration(),
+                self.current_profile,
+                getattr(self, "_top_key_label", "-"),
+                peak=getattr(self, "_peak_apm", 0),
+            )
         
         if needs_heatmap_update and self.heatmap.heatmap_enabled:
             self._update_heatmap_colors()
@@ -2767,10 +2972,21 @@ class TypeTraceUI(QMainWindow):
             self._update_heatmap_colors()
 
     def _on_profile_changed_ui(self, profile_name):
-        if profile_name != self.current_profile:
-            self.current_profile = profile_name
-            self.tracker.set_active_profile(profile_name)
-            self._request_full_update()
+        """Reagisce alla scelta dell'utente nel menu dei profili."""
+        if profile_name == self.current_profile:
+            return
+
+        self.current_profile = profile_name
+        self._request_full_update()
+
+        # "Total" e' una vista aggregata: non ci si puo' registrare sopra.
+        if profile_name == "Total":
+            return
+
+        # Il metodo si chiama set_profile: set_active_profile non e' mai esistito
+        self.tracker.set_profile(profile_name)
+        # La scelta va ricordata, altrimenti si perde al riavvio
+        self.db.set_last_profile(profile_name)
 
     def _request_full_update(self):
         if self.tab_widget.currentIndex() == 0:
@@ -2798,11 +3014,14 @@ class TypeTraceUI(QMainWindow):
         if idx >= len(counts): idx = len(counts) - 1
         max_val = counts[idx] if counts and counts[idx] > 0 else 1
         
+        # I conteggi sono archiviati con i nomi del tracker ("Esc", ",",
+        # "Page_up"), la tastiera disegna id propri ("Escape", "Comma",
+        # "PageUp"): senza questa traduzione 28 tasti su 104 restavano spenti.
         target_colors = {}
         for k, count in keys_data.items():
             if count > 0:
                 norm = min(1.0, math.pow(count / max_val, 0.6))
-                target_colors[k] = self.heatmap._resolve_color(norm)
+                target_colors[keymap.layout_for_key(k)] = self.heatmap._resolve_color(norm)
         
         self.heatmap.update_colors(target_colors)
         self.heatmap.update()
@@ -2813,54 +3032,74 @@ class TypeTraceUI(QMainWindow):
         total_keys = sum(keys_data.values())
         estimated_words = total_keys // 5
         self.session_val.setText(f"{estimated_words:,}")
-        
+
+        # Una sola lettura: prima cronologia e record venivano richiesti due
+        # volte per ogni aggiornamento, ciascuna con una copia dei dati.
         raw_stats = self.db.get_stats_for_profile(self.current_profile)
         hourly_data = raw_stats.get("hourly", {})
-        
-        peak_apm = 0
         burst_records = raw_stats.get("burst_records", [])
-        if burst_records:
-            best_burst = max(burst_records, key=lambda x: x.get("peak_apm", 0))
-            peak_apm = best_burst.get("peak_apm", 0)
-            
-        if hasattr(self, "main_stats_lbl"):
-            self.main_stats_lbl.setText(f"APM: {peak_apm} | Parole: {estimated_words}")
-            
+
         if keys_data:
             top_key = max(keys_data.items(), key=lambda x: x[1])[0]
             self.top_key_val.setText(str(top_key))
+            share = (keys_data[top_key] / total_keys * 100) if total_keys else 0
+            self._top_key_label = f"{top_key} ({share:.0f}%)"
         else:
             self.top_key_val.setText("-")
-            
+            self._top_key_label = "-"
+
         combos_data = agg_stats.get("combinations", {})
         sorted_combos = sorted(combos_data.items(), key=lambda x: x[1], reverse=True)[:5]
         self.combos_list.set_data(sorted_combos)
-        
+
+        # I bigrammi sono annidati (primo tasto -> {secondo tasto: conteggio}):
+        # ordinarli direttamente significava confrontare due dizionari, cosa
+        # che Python rifiuta, e la scheda si interrompeva a meta' rendering.
         bigrams_data = agg_stats.get("bigrams", {})
-        sorted_bigrams = sorted(bigrams_data.items(), key=lambda x: x[1], reverse=True)[:5]
-        self.bigrams_list.set_data(sorted_bigrams)
-            
-        raw_stats = self.db.get_stats_for_profile(self.current_profile)
-        hourly_data = raw_stats.get("hourly", {})
+        bigram_pairs = []
+        for first_key, next_keys in bigrams_data.items():
+            if not isinstance(next_keys, dict):
+                continue
+            for second_key, count in next_keys.items():
+                bigram_pairs.append((f"{first_key} \u2192 {second_key}", count))
+        bigram_pairs.sort(key=lambda x: x[1], reverse=True)
+        self.bigrams_list.set_data(bigram_pairs[:5])
+
         self.chart_widget.set_data(hourly_data)
-        
-        burst_records = raw_stats.get("burst_records", [])
+
         if burst_records:
             best_burst = max(burst_records, key=lambda x: x.get("peak_apm", 0))
             p_apm = best_burst.get("peak_apm", 0)
             p_dur = best_burst.get("duration", 0)
             self.peak_val.setText(f"{p_apm} APM ({p_dur}s)")
+            self._peak_apm = p_apm
         else:
             self.peak_val.setText("0 APM (0s)")
+            self._peak_apm = 0
 
     def closeEvent(self, event):
         if getattr(self, "_force_quit", False):
             if self.shutdown_callback:
                 self.shutdown_callback()
             event.accept()
-        else:
-            self.hide()
-            event.ignore()
+            return
+
+        # La finestra si riduce nell'area di notifica e il tracciamento
+        # prosegue: la prima volta va detto, altrimenti si crede di aver chiuso
+        # l'applicazione mentre continua a registrare.
+        self.hide()
+        event.ignore()
+        if not self.settings_mgr.get("tray_notice_shown"):
+            self.settings_mgr.set("tray_notice_shown", True)
+            # Non modale: un avviso che attende un clic bloccherebbe la
+            # chiusura della finestra (e qualunque test che la chiuda).
+            notice = QMessageBox(self)
+            notice.setWindowTitle("TypeTrace")
+            notice.setText(self.tr.t("tray_notice"))
+            notice.setIcon(QMessageBox.Icon.Information)
+            notice.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            notice.setModal(False)
+            notice.show()
 
     def process_event_queue(self, q=None):
         if q is not None:
@@ -2868,11 +3107,20 @@ class TypeTraceUI(QMainWindow):
 
     def mainloop(self):
         self.show()
-        import sys
-        sys.exit(self._app.exec())
+        return self._app.exec()
+
+    def close_application(self):
+        """Chiude l'applicazione uscendo dal ciclo eventi in modo ordinato."""
+        if hasattr(self, "floating_overlay"):
+            try:
+                self.floating_overlay.close()
+            except RuntimeError:
+                pass
+        self._force_quit = True
+        QApplication.instance().quit()
 
     def destroy(self):
-        self.close()
+        self.close_application()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

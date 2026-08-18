@@ -177,3 +177,39 @@
 ## 2026-06-13 BUGFIX: Heatmap Animation and Scale
 - Fixed update_colors in KeyboardHeatmapWidget to only reset 	ransition_start if it isn't currently animating, preventing stall on rapid typing.
 - Fixed _update_heatmap_colors outlier scaling issue by resolving max count against the 95th percentile, maintaining vibrant coloring.
+
+## 2026-08-18 CORREZIONI TRASVERSALI
+
+Rettifiche alla sezione "Key interfaces between files" piu' in alto, che
+descriveva un'interfaccia mai esistita (le voci precedenti restano per storico,
+come da regola del file):
+
+- `tracker.apm` / `tracker.wpm` non esistono: si usa `tracker.get_apm_wpm()`,
+  che restituisce la coppia calcolata sugli ultimi 60 secondi.
+- L'evento del tasto premuto e' `("keystroke", nome)`, non `key_pressed`.
+- Gli eventi che la coda accetta sono: `keystroke`, `incognito`,
+  `toggle_incognito`, `toggle_overlay`, `restore`, `exit`, `profile_changed`,
+  `burst_detected`. Un evento senza ramo corrispondente viene scartato in
+  silenzio (era il caso di `toggle_incognito`).
+- `FONT_FAMILY` e' "Segoe UI Variable", non "Inter": Inter non fa parte di
+  Windows e il testo ricadeva su un ripiego casuale.
+- I colori sono in `DARK_TOKENS` / `LIGHT_TOKENS` in ui.py; i valori elencati
+  nella sezione "Design system" non corrispondono piu'.
+
+Nuovi moduli:
+
+- `keymap.py` — tabella unica dei nomi tasto. tracker.py e ui.py usavano due
+  convenzioni diverse ("Esc" contro "Escape"): 28 tasti su 104 non potevano
+  illuminarsi. Contiene anche la riparazione dei nomi storici.
+- `paths.py` — percorsi di risorse e dati. I dati stanno in
+  `%APPDATA%\TypeTrace` (variabile `TYPETRACE_DATA_DIR` per sovrascrivere);
+  le risorse del bundle si leggono con `paths.resource_path()`.
+
+Contratti da rispettare:
+
+- Il database va letto solo tramite i suoi accessori: restituiscono copie.
+  `_profile_ref()` e' interno e non va usato fuori da database.py.
+- Le scritture frequenti chiamano `db.mark_dirty()`, non `db.save_data()`:
+  il salvataggio e' differito su un thread dedicato.
+- "Total" e' una vista sul profilo interno "__all__": la traduzione avviene
+  dentro il database, i chiamanti non devono farla.
