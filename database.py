@@ -14,6 +14,11 @@ import paths
 # silenziosamente gli hook troppo lenti.
 AUTOSAVE_INTERVAL_SECONDS = 20
 
+# Per quanti giorni si conserva il dettaglio ora per ora. Oltre questa soglia i
+# bucket vengono fusi in uno per giorno: l'ora esatta non serve piu' a nessuna
+# schermata, mentre i totali per tasto restano identici.
+HOURLY_RETENTION_DAYS = 180
+
 DEFAULT_DATA = {
     "settings": {
         "startup": False,
@@ -69,6 +74,12 @@ class Database:
         self._dirty = False
         self._stop_autosave = threading.Event()
         self._autosave_thread = None
+
+        # Conteggi aggregati tenuti in memoria e aggiornati a ogni battuta.
+        # Prima ogni richiesta ripercorreva tutti i bucket orari: con 205 bucket
+        # erano 1,1 ms, ma la scansione cresce in modo lineare con lo storico e
+        # l'interfaccia la invocava a ogni tasto premuto.
+        self._agg_cache = {}
 
         self.data = {}
         self.load_data()
@@ -152,6 +163,9 @@ class Database:
                 # Recupero dello storico raccolto dalle versioni precedenti
                 if self._migrate_key_names():
                     self.mark_dirty()
+
+                # Storico vecchio: si tiene il totale, si perde solo l'ora esatta
+                self.compact_history()
 
                 if "recent_processes" not in self.data.get("settings", {}) or not isinstance(self.data["settings"]["recent_processes"], list):
                     self.data.setdefault("settings", {})["recent_processes"] = []
@@ -262,9 +276,51 @@ class Database:
                 profile["bigrams"] = rebuilt
 
         settings["schema_version"] = self.SCHEMA_VERSION
+        self._invalidate_aggregates()
         if repaired:
             logging.info(f"Migrated {repaired} legacy key names")
         return repaired
+
+    def compact_history(self, retention_days=HOURLY_RETENTION_DAYS):
+        """Fonde i bucket orari piu' vecchi in un bucket per giorno.
+
+        Ogni ora di attivita' e' un dizionario di conteggi: dopo un anno sono
+        migliaia di voci e il file cresce senza limite. Oltre la finestra di
+        conservazione l'ora esatta non serve piu' a nessuna schermata, mentre i
+        totali per tasto restano intatti. Le chiavi compattate hanno la forma
+        "YYYY-MM-DD", senza la "T": chi analizza l'ora del giorno le ignora da
+        se', chi somma i totali le include normalmente.
+
+        Restituisce il numero di bucket fusi.
+        """
+        with self.lock:
+            cutoff = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%dT%H:00:00")
+            merged = 0
+
+            for profile in self.data.get("profiles", {}).values():
+                if not isinstance(profile, dict):
+                    continue
+                hourly = profile.get("hourly")
+                if not isinstance(hourly, dict):
+                    continue
+
+                rebuilt = {}
+                for hour_key, hour_data in hourly.items():
+                    if "T" in hour_key and hour_key < cutoff:
+                        day_key = hour_key.split("T")[0]
+                        target = rebuilt.setdefault(day_key, {"keys": {}})
+                        for key, count in hour_data.get("keys", {}).items():
+                            target["keys"][key] = target["keys"].get(key, 0) + count
+                        merged += 1
+                    else:
+                        rebuilt[hour_key] = hour_data
+                profile["hourly"] = rebuilt
+
+            if merged:
+                self._invalidate_aggregates()
+                self.mark_dirty()
+                logging.info(f"Compacted {merged} hourly buckets")
+            return merged
 
     def _ensure_builtin_profiles(self):
         """Helper to ensure all built-in profiles exist and are correctly marked."""
@@ -357,6 +413,7 @@ class Database:
             
             # burst_records incluso: ogni altro punto del codice lo assume
             self.data["profiles"][name] = self._empty_profile()
+            self._invalidate_aggregates(name)
             self.save_data()
             return True
 
@@ -369,6 +426,7 @@ class Database:
                 return False
             
             del self.data["profiles"][name]
+            self._invalidate_aggregates(name)
             if self.get_last_profile() == name:
                 self.set_last_profile("Default")
             self.save_data()
@@ -388,6 +446,7 @@ class Database:
             if isinstance(settings, dict):
                 self.data["settings"] = settings
             self._ensure_builtin_profiles()
+            self._invalidate_aggregates()
             self.save_data()
 
     def reset_profile_statistics(self, profile_name):
@@ -407,6 +466,7 @@ class Database:
                 # senza questo passaggio il reset sembrava non aver fatto nulla
                 # perche' la vista predefinita e' proprio quella aggregata.
                 self._rebuild_all()
+                self._invalidate_aggregates()
                 self.save_data()
 
     def _rebuild_all(self):
@@ -433,6 +493,38 @@ class Database:
 
     def _empty_profile(self):
         return {"hourly": {}, "combinations": {}, "bigrams": {}, "burst_records": []}
+
+    def _resolve_profile_name(self, profile_name):
+        """"Total" e' una vista sul profilo interno "__all__"."""
+        return "__all__" if profile_name == "Total" else profile_name
+
+    def _cached_key_counts(self, profile_name, profile=None):
+        """Conteggi per tasto del profilo, calcolati una volta sola.
+
+        La prima richiesta percorre lo storico; da li' in avanti il totale
+        viene aggiornato battuta per battuta da _log_key_to_profile.
+        """
+        resolved = self._resolve_profile_name(profile_name)
+        cached = self._agg_cache.get(resolved)
+        if cached is not None:
+            return cached
+
+        if profile is None:
+            profile = self._profile_ref(profile_name)
+        counts = {}
+        for hour_data in profile.get("hourly", {}).values():
+            for key, count in hour_data.get("keys", {}).items():
+                counts[key] = counts.get(key, 0) + count
+        self._agg_cache[resolved] = counts
+        return counts
+
+    def _invalidate_aggregates(self, profile_name=None):
+        """Scarta i totali in memoria dopo una modifica non incrementale."""
+        if profile_name is None:
+            self._agg_cache.clear()
+        else:
+            self._agg_cache.pop(self._resolve_profile_name(profile_name), None)
+            self._agg_cache.pop("__all__", None)
 
     def _profile_ref(self, profile_name):
         """Riferimento interno al profilo, senza copia. Solo per uso interno.
@@ -497,6 +589,12 @@ class Database:
                 
             # 1. Log the key press
             hour_data["keys"][key_name] = hour_data["keys"].get(key_name, 0) + 1
+
+            # Il totale in memoria si aggiorna qui, cosi' l'interfaccia non
+            # deve piu' ripercorrere lo storico a ogni tasto premuto.
+            cached = self._agg_cache.get(profile_name)
+            if cached is not None:
+                cached[key_name] = cached.get(key_name, 0) + 1
             
             # 2. Log combinations if present (e.g. Ctrl+C)
             if combination:
@@ -523,11 +621,7 @@ class Database:
         with self.lock:
             profile = self._profile_ref(profile_name)
 
-            aggregated_keys = {}
-            # Aggregate hourly key counts
-            for hour_key, hour_data in profile.get("hourly", {}).items():
-                for key, count in hour_data.get("keys", {}).items():
-                    aggregated_keys[key] = aggregated_keys.get(key, 0) + count
+            aggregated_keys = dict(self._cached_key_counts(profile_name, profile))
 
             # Combinations are already aggregated on the profile level
             aggregated_combos = dict(profile.get("combinations", {}))
@@ -637,6 +731,97 @@ class Database:
                 "bigram": bigram_str
             }
             
+    # ------------------------------------------------------------------
+    # Statistiche derivate
+    # ------------------------------------------------------------------
+
+    def get_daily_totals(self, profile_name, days=None):
+        """Battute per giorno, dalla piu' vecchia alla piu' recente.
+
+        I bucket sono orari ("2026-08-17T09:00:00") o giornalieri se compattati
+        ("2026-08-17"): in entrambi i casi la data e' il prefisso.
+        """
+        with self.lock:
+            profile = self._profile_ref(profile_name)
+            totals = {}
+            for bucket_key, bucket in profile.get("hourly", {}).items():
+                day = bucket_key.split("T")[0]
+                if not isinstance(bucket, dict):
+                    continue
+                totals[day] = totals.get(day, 0) + sum(bucket.get("keys", {}).values())
+
+        ordered = sorted(totals.items())
+        if days is None:
+            return ordered
+
+        # Si riempiono anche i giorni senza attivita', altrimenti il grafico
+        # mente sulla continuita' dell'uso.
+        today = datetime.now().date()
+        window = []
+        for offset in range(days - 1, -1, -1):
+            day = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
+            window.append((day, totals.get(day, 0)))
+        return window
+
+    def get_accuracy_stats(self, profile_name):
+        """Rapporto fra correzioni e battute totali.
+
+        session_total_clicks e session_backspace_clicks erano gia' contati dal
+        tracker ma non venivano letti da nessuno, e valevano comunque solo per
+        la sessione in corso. Qui il calcolo si basa sui conteggi archiviati,
+        quindi vale su tutto lo storico del profilo.
+        """
+        with self.lock:
+            counts = self._cached_key_counts(profile_name)
+            total = sum(counts.values())
+            corrections = counts.get("Backspace", 0) + counts.get("Delete", 0)
+
+        if total <= 0:
+            return {"total": 0, "corrections": 0, "accuracy": 0.0, "correction_rate": 0.0}
+
+        rate = corrections / total
+        return {
+            "total": total,
+            "corrections": corrections,
+            "accuracy": (1.0 - rate) * 100.0,
+            "correction_rate": rate * 100.0,
+        }
+
+    def get_streaks(self, profile_name):
+        """Giorni consecutivi di attivita': serie in corso e serie migliore."""
+        days = [day for day, count in self.get_daily_totals(profile_name) if count > 0]
+        if not days:
+            return {"current": 0, "best": 0, "active_days": 0, "best_day": None, "best_day_count": 0}
+
+        dates = sorted(datetime.strptime(day, "%Y-%m-%d").date() for day in days)
+
+        best = run = 1
+        for previous, current in zip(dates, dates[1:]):
+            run = run + 1 if (current - previous).days == 1 else 1
+            best = max(best, run)
+
+        # La serie in corso vale solo se arriva a oggi o a ieri
+        today = datetime.now().date()
+        current_run = 0
+        if (today - dates[-1]).days <= 1:
+            current_run = 1
+            for previous, following in zip(reversed(dates[:-1]), reversed(dates[1:])):
+                if (following - previous).days == 1:
+                    current_run += 1
+                else:
+                    break
+
+        totals = dict(self.get_daily_totals(profile_name))
+        best_day = max(totals.items(), key=lambda x: x[1]) if totals else (None, 0)
+
+        return {
+            "current": current_run,
+            "best": best,
+            "active_days": len(dates),
+            "best_day": best_day[0],
+            "best_day_count": best_day[1],
+        }
+
     def _empty_stats(self):
         return {
             "total": 0,

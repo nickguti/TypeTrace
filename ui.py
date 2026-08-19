@@ -696,8 +696,10 @@ class LegendBarWidget(QWidget):
         painter.setFont(QFont(FONT_FAMILY, 10))
         lbl_low = self.tr.t("cold") if self.tr else "Less"
         lbl_high = self.tr.t("hot") if self.tr else "More"
-        painter.drawText(QRectF(x - 50, y - 5, 40, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, lbl_low)
-        painter.drawText(QRectF(x + bar_w + 10, y - 5, 40, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lbl_high)
+        # Riquadri larghi abbastanza per le etichette tradotte: con 40 px
+        # "Freddo" veniva tagliato a meta'.
+        painter.drawText(QRectF(x - 90, y - 5, 80, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, lbl_low)
+        painter.drawText(QRectF(x + bar_w + 10, y - 5, 80, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lbl_high)
         painter.end()
 
 
@@ -1163,6 +1165,96 @@ class HourlyChartWidget(QWidget):
         for h_val in [0, 6, 12, 18, 23]:
             x = padding_x + h_val * bar_total_w + bar_total_w / 2
             painter.drawText(QRectF(x - 15, h - padding_y + 4, 30, 16), Qt.AlignmentFlag.AlignCenter, f"{h_val}h")
+        painter.end()
+
+
+class DailyChartWidget(QWidget):
+    """Battute giorno per giorno nell'ultimo mese.
+
+    Il grafico "Activity Timeline" somma tutto lo storico in 24 barre per ora
+    del giorno: utilissimo per capire *quando* si scrive, inutile per sapere
+    quanto si e' scritto ieri. Questo copre il secondo caso.
+    """
+
+    def __init__(self, parent=None, tr=None):
+        super().__init__(parent)
+        self.daily_data = []
+        self.setMinimumHeight(110)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.tokens = DARK_TOKENS
+        self._tr = tr
+
+    def set_tokens(self, tokens: ThemeTokens):
+        self.tokens = tokens
+        self.update()
+
+    def set_data(self, daily_data):
+        self.daily_data = list(daily_data or [])
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), hex_to_qcolor(self.tokens.bg_panel))
+
+        w, h = self.width(), self.height()
+        if w < 50 or h < 30:
+            painter.end()
+            return
+
+        values = [count for _, count in self.daily_data]
+        max_val = max(values) if values else 0
+        if max_val <= 0:
+            painter.setFont(QFont(FONT_FAMILY, 13))
+            painter.setPen(hex_to_qcolor(self.tokens.text_secondary))
+            no_data = self._tr.t("no_data") if self._tr else "No data yet."
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, no_data)
+            painter.end()
+            return
+
+        padding_x, padding_y = 35, 25
+        chart_w = w - padding_x * 2
+        chart_h = h - padding_y * 2
+
+        painter.setPen(QPen(hex_to_qcolor(self.tokens.border), 1.0))
+        for i in range(1, 4):
+            y = h - padding_y - (chart_h * i / 4)
+            painter.drawLine(int(padding_x), int(y), int(w - padding_x), int(y))
+        painter.drawLine(int(padding_x), int(h - padding_y), int(w - padding_x), int(h - padding_y))
+
+        slot_w = chart_w / max(1, len(self.daily_data))
+        bar_w = max(2.0, slot_w * 0.6)
+        accent_c = hex_to_qcolor(self.tokens.accent)
+        dark_c = hex_to_qcolor(self.tokens.bg_window)
+
+        for index, (day, count) in enumerate(self.daily_data):
+            x0 = padding_x + index * slot_w + (slot_w - bar_w) / 2.0
+            y_bottom = h - padding_y
+            if count <= 0:
+                # Un giorno senza attivita' resta visibile come tacca
+                painter.setPen(QPen(hex_to_qcolor(self.tokens.border), 1.0))
+                painter.drawLine(int(x0 + bar_w / 2), int(y_bottom), int(x0 + bar_w / 2), int(y_bottom - 2))
+                continue
+            bar_h = max(2.0, (count / max_val) * chart_h)
+            grad = QLinearGradient(x0, y_bottom - bar_h, x0, y_bottom)
+            grad.setColorAt(0.0, accent_c)
+            grad.setColorAt(1.0, dark_c)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(grad))
+            painter.drawRoundedRect(QRectF(x0, y_bottom - bar_h, bar_w, bar_h), 2, 2)
+
+        painter.setFont(QFont(FONT_FAMILY, 11))
+        painter.setPen(hex_to_qcolor(self.tokens.text_secondary))
+        if self.daily_data:
+            first_day = self.daily_data[0][0][5:].replace("-", "/")
+            last_day = self.daily_data[-1][0][5:].replace("-", "/")
+            painter.drawText(QRectF(padding_x - 10, h - padding_y + 4, 60, 16),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, first_day)
+            painter.drawText(QRectF(w - padding_x - 50, h - padding_y + 4, 60, 16),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, last_day)
+            painter.drawText(QRectF(2, padding_y - 18, w - 4, 16),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             f"max {max_val:,}")
         painter.end()
 
 
@@ -2117,6 +2209,79 @@ class TypeTraceUI(QMainWindow):
         
         self.telemetry_cards = [self.session_card, self.peak_card, self.top_key_card]
         tel_layout.addLayout(cards_layout)
+
+        # Seconda riga: precisione e costanza, calcolate da dati gia' raccolti
+        cards_layout_2 = QHBoxLayout()
+        cards_layout_2.setSpacing(20)
+
+        self.accuracy_card = MiniCard()
+        ac_layout = QVBoxLayout(self.accuracy_card)
+        ac_lbl = QLabel(self.tr.t("telemetry_accuracy"))
+        ac_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        ac_sub = QLabel(self.tr.t("telemetry_accuracy_desc"))
+        ac_sub.setFont(QFont(FONT_FAMILY, 10))
+        self.telemetry_sub_labels.append(ac_sub)
+        self.accuracy_val = QLabel("-")
+        self.accuracy_val.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
+        ac_layout.addWidget(ac_lbl)
+        ac_layout.addWidget(ac_sub)
+        ac_layout.addSpacing(10)
+        ac_layout.addWidget(self.accuracy_val)
+        ac_layout.addStretch()
+        cards_layout_2.addWidget(self.accuracy_card)
+
+        self.streak_card = MiniCard()
+        st_layout = QVBoxLayout(self.streak_card)
+        st_lbl = QLabel(self.tr.t("telemetry_streak"))
+        st_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        st_sub = QLabel(self.tr.t("telemetry_streak_desc"))
+        st_sub.setFont(QFont(FONT_FAMILY, 10))
+        self.telemetry_sub_labels.append(st_sub)
+        self.streak_val = QLabel("-")
+        self.streak_val.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
+        st_layout.addWidget(st_lbl)
+        st_layout.addWidget(st_sub)
+        st_layout.addSpacing(10)
+        st_layout.addWidget(self.streak_val)
+        st_layout.addStretch()
+        cards_layout_2.addWidget(self.streak_card)
+
+        self.record_card = MiniCard()
+        rc_layout = QVBoxLayout(self.record_card)
+        rc_lbl = QLabel(self.tr.t("telemetry_record_day"))
+        rc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        rc_sub = QLabel(self.tr.t("telemetry_record_day_desc"))
+        rc_sub.setFont(QFont(FONT_FAMILY, 10))
+        self.telemetry_sub_labels.append(rc_sub)
+        self.record_val = QLabel("-")
+        self.record_val.setFont(QFont(FONT_FAMILY, 24, QFont.Weight.Bold))
+        rc_layout.addWidget(rc_lbl)
+        rc_layout.addWidget(rc_sub)
+        rc_layout.addSpacing(10)
+        rc_layout.addWidget(self.record_val)
+        rc_layout.addStretch()
+        cards_layout_2.addWidget(self.record_card)
+
+        self.telemetry_cards.extend([self.accuracy_card, self.streak_card, self.record_card])
+        self.telemetry_labels.extend([ac_lbl, st_lbl, rc_lbl])
+        tel_layout.addLayout(cards_layout_2)
+
+        # Grafico giorno per giorno
+        self.daily_card = MiniCard()
+        dc_layout = QVBoxLayout(self.daily_card)
+        dc_lbl = QLabel(self.tr.t("daily_activity"))
+        dc_lbl.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        dc_sub = QLabel(self.tr.t("daily_activity_desc"))
+        dc_sub.setFont(QFont(FONT_FAMILY, 10))
+        self.telemetry_sub_labels.append(dc_sub)
+        self.daily_chart = DailyChartWidget(self, self.tr)
+        dc_layout.addWidget(dc_lbl)
+        dc_layout.addWidget(dc_sub)
+        dc_layout.addSpacing(10)
+        dc_layout.addWidget(self.daily_chart, stretch=1)
+        tel_layout.addWidget(self.daily_card, stretch=1)
+        self.telemetry_cards.append(self.daily_card)
+        self.telemetry_labels.append(dc_lbl)
         
         self.chart_card = MiniCard()
         cc_layout = QVBoxLayout(self.chart_card)
@@ -2747,6 +2912,8 @@ class TypeTraceUI(QMainWindow):
         self.heatmap.set_tokens(tokens)
         self.legend.set_tokens(tokens)
         self.chart_widget.set_tokens(tokens)
+        if hasattr(self, "daily_chart"):
+            self.daily_chart.set_tokens(tokens)
         self.combos_list.set_tokens(tokens)
         self.bigrams_list.set_tokens(tokens)
         self.overlay.set_tokens(tokens)
@@ -2957,13 +3124,50 @@ class TypeTraceUI(QMainWindow):
                 peak=getattr(self, "_peak_apm", 0),
             )
         
-        if needs_heatmap_update and self.heatmap.heatmap_enabled:
+        # Ricolorare la tastiera ha senso solo se la si sta guardando
+        if (needs_heatmap_update and self.heatmap.heatmap_enabled
+                and self.isVisible() and self.tab_widget.currentIndex() == 0):
             self._update_heatmap_colors()
 
+    def _has_running_animation(self):
+        """C'e' qualcosa che si sta effettivamente muovendo sulla tastiera?"""
+        heatmap = self.heatmap
+        return bool(heatmap.ripples
+                    or heatmap.transition_start
+                    or heatmap.banner_state
+                    or heatmap.flash_overlay_alpha > 0)
+
     def _on_anim_tick(self):
+        # L'intestazione ha una pulsazione continua, ma e' alta 80 px.
         self.header.on_anim_tick()
         self.header.update()
-        self.heatmap.update()
+
+        # La tastiera, che sono 104 tasti disegnati a mano, veniva ridisegnata
+        # 33 volte al secondo per sempre, anche a schermo fermo.
+        if self._has_running_animation():
+            self.heatmap.update()
+
+    def _set_idle_mode(self, idle):
+        """Rallenta o ferma i timer quando la finestra non e' visibile.
+
+        L'applicazione vive nell'area di notifica: senza questo, restava a
+        ridisegnare a 33 fps una finestra che nessuno stava guardando.
+        """
+        if idle:
+            self.anim_timer.stop()
+            self.timer.setInterval(200)
+        else:
+            self.timer.setInterval(16)
+            if not self.anim_timer.isActive():
+                self.anim_timer.start(30)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._set_idle_mode(False)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._set_idle_mode(True)
 
     def _on_tab_changed(self, index):
         if index == 1:
@@ -3066,6 +3270,25 @@ class TypeTraceUI(QMainWindow):
         self.bigrams_list.set_data(bigram_pairs[:5])
 
         self.chart_widget.set_data(hourly_data)
+        self.daily_chart.set_data(self.db.get_daily_totals(self.current_profile, days=30))
+
+        accuracy = self.db.get_accuracy_stats(self.current_profile)
+        if accuracy["total"]:
+            self.accuracy_val.setText(f"{accuracy['accuracy']:.1f}%")
+            self.accuracy_card.setToolTip(
+                f"{accuracy['corrections']:,} / {accuracy['total']:,}")
+        else:
+            self.accuracy_val.setText("-")
+
+        streaks = self.db.get_streaks(self.current_profile)
+        self.streak_val.setText(self.tr.t("days_count").replace("{n}", str(streaks["current"])))
+        self.streak_card.setToolTip(
+            self.tr.t("streak_best").replace("{n}", str(streaks["best"])))
+        if streaks["best_day"]:
+            self.record_val.setText(f"{streaks['best_day_count']:,}")
+            self.record_card.setToolTip(streaks["best_day"])
+        else:
+            self.record_val.setText("-")
 
         if burst_records:
             best_burst = max(burst_records, key=lambda x: x.get("peak_apm", 0))

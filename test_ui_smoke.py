@@ -214,6 +214,76 @@ class TestWindowSmoke(unittest.TestCase):
             self.assertIn(layout_id, colored, f"il tasto {layout_id} non si illumina")
 
 
+class TestDerivedStatistics(unittest.TestCase):
+    """Precisione, serie e attivita' giornaliera."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = Database(filepath="test_data.json", directory=self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _seed(self, day, key, times=1):
+        """Scrive direttamente nel bucket di una data passata."""
+        profile = self.db.data["profiles"]["Default"]
+        bucket = profile.setdefault("hourly", {}).setdefault(day + "T10:00:00", {"keys": {}})
+        bucket["keys"][key] = bucket["keys"].get(key, 0) + times
+        self.db._invalidate_aggregates()
+
+    def test_accuracy_counts_corrections(self):
+        for _ in range(90):
+            self.db.log_key("Default", "A")
+        for _ in range(10):
+            self.db.log_key("Default", "Backspace")
+        stats = self.db.get_accuracy_stats("Default")
+        self.assertEqual(stats["total"], 100)
+        self.assertEqual(stats["corrections"], 10)
+        self.assertAlmostEqual(stats["accuracy"], 90.0, places=3)
+
+    def test_daily_totals_fill_inactive_days(self):
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        self._seed((today - timedelta(days=2)).strftime("%Y-%m-%d"), "A", 5)
+        window = self.db.get_daily_totals("Default", days=5)
+        self.assertEqual(len(window), 5, "i giorni senza attivita' devono comparire")
+        self.assertEqual(sum(count for _, count in window), 5)
+
+    def test_streak_counts_consecutive_days(self):
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        for offset in (0, 1, 2, 5):
+            self._seed((today - timedelta(days=offset)).strftime("%Y-%m-%d"), "A", 3)
+        streaks = self.db.get_streaks("Default")
+        self.assertEqual(streaks["current"], 3)
+        self.assertEqual(streaks["active_days"], 4)
+        self.assertEqual(streaks["best_day_count"], 3)
+
+    def test_compaction_preserves_every_keystroke(self):
+        from datetime import datetime, timedelta
+        old_day = (datetime.now() - timedelta(days=400)).strftime("%Y-%m-%d")
+        self._seed(old_day, "A", 7)
+        self._seed(old_day, "B", 3)
+        for _ in range(4):
+            self.db.log_key("Default", "C")
+
+        before = sum(self.db.get_aggregated_stats("Default")["keys"].values())
+        merged = self.db.compact_history()
+        after = self.db.get_aggregated_stats("Default")["keys"]
+
+        self.assertGreater(merged, 0, "nessun bucket compattato")
+        self.assertEqual(sum(after.values()), before, "battute perse nella compattazione")
+        self.assertEqual(after["A"], 7)
+        self.assertIn(old_day, self.db.data["profiles"]["Default"]["hourly"])
+
+    def test_aggregate_cache_stays_in_sync(self):
+        self.db.log_key("Default", "A")
+        first = self.db.get_aggregated_stats("Default")["keys"]["A"]
+        self.db.log_key("Default", "A")
+        second = self.db.get_aggregated_stats("Default")["keys"]["A"]
+        self.assertEqual((first, second), (1, 2), "il totale in memoria non si aggiorna")
+
+
 class TestProcessDetection(unittest.TestCase):
     def test_foreground_process_is_detected(self):
         """Restituiva sempre None: l'auto-switch non poteva funzionare."""
