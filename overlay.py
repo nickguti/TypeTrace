@@ -14,6 +14,11 @@ from PyQt6.QtGui import (
 
 
 
+# Stessa famiglia usata dalla finestra principale: "Inter" non fa parte di
+# Windows e il testo ricadeva su un ripiego diverso da quello del resto della UI.
+FONT_FAMILY = "Segoe UI Variable"
+
+
 class FloatingOverlay(QWidget):
     def __init__(self, parent_ui=None, settings=None):
         super().__init__(None)
@@ -46,7 +51,10 @@ class FloatingOverlay(QWidget):
             stored = settings.get("overlay_fields")
             if isinstance(stored, list) and len(stored) > 0:
                 self._visible_fields = stored
-        self._data = {"apm": 0, "wpm": 0, "session": "00:00:00", "profile": "Default", "top_key": "Space (0%)"}
+        # "peak" era elencato fra i campi mostrabili ma non esisteva qui: la
+        # riga "PEAK APM" restava percio' sempre vuota.
+        self._data = {"apm": 0, "wpm": 0, "peak": 0, "session": "00:00:00",
+                      "profile": "Default", "top_key": "Space (0%)"}
         self._drag_pos = QPoint()
         self._dragging = False
         self._resizing = False
@@ -66,26 +74,65 @@ class FloatingOverlay(QWidget):
         logical_w = 200
         if self._settings:
             stored_w = self._settings.get("overlay_width")
-            if stored_w: logical_w = max(logical_w, stored_w / scale)
+            # Si rispetta la larghezza scelta dall'utente: prima un max() la
+            # riportava sempre ad almeno 200 px, annullando i ridimensionamenti
+            # piu' stretti appena salvati.
+            if stored_w:
+                logical_w = max(140, stored_w / scale)
             stored_h = self._settings.get("overlay_height")
             if stored_h and stored_h > (logical_h * scale):
                 logical_h = stored_h / scale
         self.resize(max(int(logical_w * scale), int(140 * scale)), max(int(logical_h * scale), int(50 * scale)))
 
     def _restore_position(self):
+        """Rimette l'overlay dove l'utente lo aveva lasciato, se e' ancora visibile.
+
+        La posizione salvata veniva applicata senza controlli: bastava scollegare
+        un monitor per ritrovarsi le coordinate di uno schermo che non c'e' piu'
+        (per esempio x=-291) e un widget irraggiungibile, che non si puo'
+        nemmeno trascinare indietro.
+        """
+        from PyQt6.QtWidgets import QApplication
+
         ox = None
         oy = None
         if self._settings:
             ox = self._settings.get("overlay_x")
             oy = self._settings.get("overlay_y")
-        if ox is not None and oy is not None:
+
+        if ox is not None and oy is not None and self._is_on_a_screen(int(ox), int(oy)):
             self.move(int(ox), int(oy))
-        else:
-            from PyQt6.QtWidgets import QApplication
-            screen = QApplication.primaryScreen()
-            if screen:
-                geo = screen.availableGeometry()
-                self.move(geo.right() - self.width() - 20, geo.bottom() - self.height() - 20)
+            return
+
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            self.move(geo.right() - self.width() - 20, geo.bottom() - self.height() - 20)
+
+    def _is_on_a_screen(self, x, y):
+        """True se il rettangolo dell'overlay ricade in un'area visibile."""
+        from PyQt6.QtCore import QRect
+        from PyQt6.QtWidgets import QApplication
+
+        rect = QRect(x, y, max(self.width(), 40), max(self.height(), 30))
+        for screen in QApplication.screens():
+            if screen.availableGeometry().intersects(rect):
+                # Serve una porzione visibile sufficiente ad afferrarlo col mouse
+                visible = screen.availableGeometry().intersected(rect)
+                if visible.width() >= 40 and visible.height() >= 20:
+                    return True
+        return False
+
+    def reset_position(self):
+        """Riporta l'overlay in basso a destra sullo schermo principale."""
+        from PyQt6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            self.move(geo.right() - self.width() - 20, geo.bottom() - self.height() - 20)
+            if self._settings:
+                self._settings.set("overlay_x", self.x())
+                self._settings.set("overlay_y", self.y())
 
     def activate(self):
         self.show()
@@ -109,7 +156,12 @@ class FloatingOverlay(QWidget):
         if show_wpm: fields.append("wpm")
         if show_peak: fields.append("peak")
         if show_profile: fields.append("profile")
-        
+
+        # Spegnendo tutte e quattro le voci restava un rettangolo vuoto senza
+        # alcun modo di capire cosa fosse: si tiene sempre almeno l'APM.
+        if not fields:
+            fields = ["apm"]
+
         self._visible_fields = fields
         self.setWindowOpacity(opacity)
         self._scale = scale
@@ -132,12 +184,15 @@ class FloatingOverlay(QWidget):
             self._text_secondary = "#8E9297"
         self.update()
 
-    def update_data(self, apm=0, wpm=0, session="00:00:00", profile="Default", top_key="Space (0%)"):
+    def update_data(self, apm=0, wpm=0, session="00:00:00", profile="Default",
+                    top_key="Space (0%)", peak=None):
         self._data["apm"] = apm
         self._data["wpm"] = wpm
         self._data["session"] = session
         self._data["profile"] = profile
         self._data["top_key"] = top_key
+        if peak is not None:
+            self._data["peak"] = peak
         self.update()
 
     def update_stats(self, apm, wpm):
@@ -179,11 +234,11 @@ class FloatingOverlay(QWidget):
             label_text = field_labels.get(fid, fid.upper())
             value_text = str(self._data.get(fid, ""))
             painter.setPen(sec_c)
-            font_label = QFont("Inter", 10)
+            font_label = QFont(FONT_FAMILY, 10)
             painter.setFont(font_label)
             painter.drawText(QRectF(12, y, 80, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label_text)
             painter.setPen(accent_c)
-            font_val = QFont("Inter", 13, QFont.Weight.Bold)
+            font_val = QFont(FONT_FAMILY, 13, QFont.Weight.Bold)
             painter.setFont(font_val)
             painter.drawText(QRectF(92, y, logical_w - 104, row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, value_text)
             y += row_h

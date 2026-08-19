@@ -1,10 +1,27 @@
+import collections
 import time
 import logging
 import threading
 import ctypes
 from pynput import keyboard
 
+import keymap
 import utils
+
+# Nomi dei tasti che sono essi stessi un modificatore: premendoli da soli non
+# si sta componendo nessuna scorciatoia.
+MODIFIER_KEY_NAMES = {
+    "Ctrl_L", "Ctrl_R", "Shift_L", "Shift_R",
+    "Alt_L", "Alt_R", "Win_L", "Win_R",
+}
+
+# Virtual-key code dei modificatori, per risincronizzare lo stato con Windows
+_VK_MODIFIERS = {
+    "ctrl": (0x11,),          # VK_CONTROL
+    "shift": (0x10,),         # VK_SHIFT
+    "alt": (0x12,),           # VK_MENU
+    "win": (0x5B, 0x5C),      # VK_LWIN, VK_RWIN
+}
 
 BUILTIN_GAMING_PROCESSES = {
     "steam.exe", "epicgameslauncher.exe", "leagueoflegends.exe", "valorant.exe",
@@ -76,13 +93,23 @@ class KeystrokeTracker:
             "alt": False,
             "win": False
         }
+        # AltGr su Windows equivale a Ctrl_L + Alt_R: va riconosciuto a parte,
+        # altrimenti ogni carattere che lo richiede (@ # [ ] { }) verrebbe
+        # archiviato come una scorciatoia Ctrl+Alt mai premuta.
+        self.altgr_active = False
         self.pressed_keys = set()
+
+        # L'utente puo' disattivare il cambio automatico di profilo
+        self.auto_switch_enabled = True
         
         # Bigram tracking (last key pressed)
         self.last_key = None
         
-        # APM/WPM tracking
-        self.keystroke_times = []
+        # APM/WPM tracking.
+        # Una deque perche' viene riempita dal thread dell'hook e svuotata da
+        # quello della UI: append e popleft sono atomici, mentre riassegnare
+        # una lista faceva perdere le battute arrivate nel frattempo.
+        self.keystroke_times = collections.deque()
         
         # pynput listener
         self.listener = None
@@ -137,6 +164,14 @@ class KeystrokeTracker:
         # 2. Character keys
         if hasattr(key, 'char') and key.char is not None:
             c = key.char
+            # Con Ctrl premuto il sistema produce un carattere di controllo
+            # (Ctrl+S -> "\x13") e il tasto reale andrebbe perso: si risale dal
+            # virtual-key code, che resta valido.
+            if len(c) == 1 and ord(c) < 32:
+                by_vk = keymap.key_for_vk(getattr(key, 'vk', None))
+                if by_vk:
+                    return by_vk
+                return keymap.CTRL_CHAR_TO_KEY.get(c, c)
             if c == ' ':
                 return 'Space'
             if c.isalpha():
@@ -191,34 +226,81 @@ class KeystrokeTracker:
         
         if key in special_map:
             return special_map[key]
-            
-        # Fallback
+
+        # Ultima risorsa: pynput rappresenta i tasti che non sa nominare come
+        # "<49>". Prima di archiviare quella stringa si prova con il vk.
+        by_vk = keymap.key_for_vk(getattr(key, 'vk', None))
+        if by_vk:
+            return by_vk
+
         name = str(key).replace('Key.', '')
         return name.capitalize()
+
+    def _sync_modifiers(self):
+        """Riallinea lo stato dei modificatori a quello reale del sistema.
+
+        Durante un Alt+Tab il focus passa a un'altra finestra mentre Alt e'
+        ancora premuto e l'evento di rilascio puo' non arrivare mai all'hook:
+        senza questo controllo il modificatore resta agganciato per sempre e
+        ogni tasto successivo viene archiviato come combinazione "Alt+X".
+        """
+        try:
+            get_state = ctypes.windll.user32.GetAsyncKeyState
+        except Exception:
+            return
+        for name, vks in _VK_MODIFIERS.items():
+            try:
+                down = any(get_state(vk) & 0x8000 for vk in vks)
+            except Exception:
+                return
+            if not down and self.pressed_modifiers.get(name):
+                self.pressed_modifiers[name] = False
+                if name == "alt":
+                    self.altgr_active = False
+
+    def reset_key_state(self):
+        """Azzera i tasti considerati premuti (usato al cambio di finestra)."""
+        self.pressed_keys.clear()
+        for name in self.pressed_modifiers:
+            self.pressed_modifiers[name] = False
+        self.altgr_active = False
+        self.last_key = None
 
     def on_press(self, key):
         """Callback invoked when a key is pressed."""
         try:
+            # Prima di tutto si verifica che i modificatori ancora segnati come
+            # premuti lo siano davvero: gli eventi di rilascio possono essersi
+            # persi mentre il focus era su un'altra finestra.
+            self._sync_modifiers()
+
             key_name = self.map_key_to_name(key)
             if key_name in self.pressed_keys:
                 return
             self.pressed_keys.add(key_name)
-            
+
             # 1. Update modifier states
             is_modifier = False
             if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
                 self.pressed_modifiers["ctrl"] = True
                 is_modifier = True
+            elif key == keyboard.Key.alt_gr:
+                # Windows sintetizza Ctrl_L subito prima di AltGr: quel Ctrl non
+                # e' stato premuto dall'utente e va ritirato.
+                self.altgr_active = True
+                self.pressed_modifiers["ctrl"] = False
+                self.pressed_modifiers["alt"] = False
+                is_modifier = True
             elif key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r):
                 self.pressed_modifiers["shift"] = True
                 is_modifier = True
-            elif key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt_gr):
+            elif key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r):
                 self.pressed_modifiers["alt"] = True
                 is_modifier = True
             elif key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r):
                 self.pressed_modifiers["win"] = True
                 is_modifier = True
-                
+
             # 2. Check for Global Hotkeys
             # Ctrl + Shift + I to toggle Incognito Mode
             if self.pressed_modifiers["ctrl"] and self.pressed_modifiers["shift"] and key_name == 'I':
@@ -250,12 +332,14 @@ class KeystrokeTracker:
             if self.pressed_modifiers["alt"]: active_mods.append("Alt")
             if self.pressed_modifiers["win"]: active_mods.append("Win")
             if self.pressed_modifiers["shift"]: active_mods.append("Shift")
-            
+
             # Only log combination if it includes modifiers (and not just shift by itself for typing capitals)
             non_shift_mods = any(self.pressed_modifiers[m] for m in ["ctrl", "alt", "win"])
-            if non_shift_mods and active_mods:
+            # Un modificatore premuto da solo non e' una scorciatoia: senza
+            # questa guardia si archiviavano voci come "Ctrl+Ctrl_L".
+            if non_shift_mods and active_mods and key_name not in MODIFIER_KEY_NAMES:
                 combination = "+".join(active_mods) + "+" + key_name
-                
+
             # 5. Log the keystroke
             # Ignore modifier keys and other special utility keys for bigram transitions
             ignore_bigrams = [
@@ -295,9 +379,13 @@ class KeystrokeTracker:
                 
             if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
                 self.pressed_modifiers["ctrl"] = False
+            elif key == keyboard.Key.alt_gr:
+                self.altgr_active = False
+                self.pressed_modifiers["alt"] = False
+                self.pressed_modifiers["ctrl"] = False
             elif key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r):
                 self.pressed_modifiers["shift"] = False
-            elif key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt_gr):
+            elif key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r):
                 self.pressed_modifiers["alt"] = False
             elif key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r):
                 self.pressed_modifiers["win"] = False
@@ -308,8 +396,13 @@ class KeystrokeTracker:
         """Calculates and returns the rolling APM and WPM (last 60 seconds)."""
         now = time.time()
         # Clean up events older than 60 seconds
-        self.keystroke_times = [t for t in self.keystroke_times if t >= now - 60]
-        
+        cutoff = now - 60
+        try:
+            while self.keystroke_times and self.keystroke_times[0] < cutoff:
+                self.keystroke_times.popleft()
+        except IndexError:
+            pass
+
         apm = len(self.keystroke_times)
         wpm = int(apm / 5) # 5 strokes standard = 1 word
         return apm, wpm
@@ -339,6 +432,17 @@ class KeystrokeTracker:
         if self.listener:
             self.listener.stop()
         self.stop_automation = True
+
+        # Un burst ancora in corso alla chiusura andrebbe perso: se ha gia'
+        # superato la soglia di durata lo si archivia adesso.
+        if self.burst_active and self.burst_start_time:
+            duration = time.time() - self.burst_start_time
+            if duration >= 5.0:
+                try:
+                    self.db.add_burst_record(self.active_profile, self.burst_peak_apm, duration)
+                except Exception as e:
+                    logging.exception(f"Error saving in-progress burst on shutdown: {e}")
+            self.burst_active = False
 
     def run_window_monitoring(self):
         """Background thread executing every 1s for Burst APM logging and Profile Auto-switching."""
@@ -379,6 +483,16 @@ class KeystrokeTracker:
                         self.last_detected_process = proc_name
                         proc_lower = proc_name.lower()
 
+                        # La finestra in primo piano e' cambiata: i tasti che
+                        # risultavano premuti appartengono all'applicazione
+                        # precedente e i loro rilasci potrebbero non arrivare.
+                        self.reset_key_state()
+
+                        # In incognito non si registra nemmeno quali applicazioni
+                        # sono state usate.
+                        if self.incognito_mode:
+                            continue
+
                         # Priority 1: user's custom mappings
                         mappings = self.db.get_profile_mappings()
                         if proc_lower in mappings:
@@ -392,7 +506,9 @@ class KeystrokeTracker:
                         self.db.log_process_seen(proc_name, target_profile)
 
                         # Switch profile if changed
-                        if target_profile in self.db.get_profiles() and target_profile != self.active_profile:
+                        if (self.auto_switch_enabled
+                                and target_profile in self.db.get_profiles()
+                                and target_profile != self.active_profile):
                             self.set_profile(target_profile)
                             self.db.set_last_profile(target_profile)
                             if self.ui_update_callback:

@@ -26,11 +26,13 @@
 
 ## ⌨️ Key Features
 
-- **⌨️ 100% Full-Size ANSI Virtual Keyboard:** Real-time keypress tracking with a smooth "Glow Effect" animation. Supports multiple layouts (100% Full-Size, TKL, 75%, 65%, and 60%).
-- **🔥 Dynamic Heatmap Visualization:** Multi-theme support (Neon Cyberpunk, Pudding Keycaps, Mechanical) using advanced color interpolation based on global key frequency.
-- **🧠 Advanced Analytics:** Error-rate analysis, live and peak APM/WPM monitoring, bigram transition tracking, and "Burst Mode" detection.
+- **⌨️ 100% Full-Size ANSI Virtual Keyboard:** Real-time keypress tracking with a smooth "Glow Effect" animation. Three layouts: 100% Full-Size, TKL and 60%.
+- **🔥 Dynamic Heatmap Visualization:** Five colour ramps (Classic Heatmap, Neon, Monochrome, Ice Blue, Sunset) and three keycap styles (Mechanical, Neon Cyberpunk, Pudding Keycaps), interpolated from your own key frequencies.
+- **🧠 Advanced Analytics:** Live and peak APM/WPM, typing accuracy, daily activity over the last 30 days, current and best streak, best-day record, bigram transition tracking, top shortcuts, hour-of-day chart and "Burst Mode" records.
 - **🔧 Smart Automation (Process Auto-Switch):** Context-aware profiles (e.g., automatically switches between "Gaming" and "Desktop" based on the active Windows process).
-- **🛡️ Local Privacy & Incognito Mode:** 100% local JSON storage (zero data telemetries) and a global hotkey (`Ctrl+Shift+I`) to instantly pause tracking.
+- **🛡️ Local Privacy & Incognito Mode:** 100% local JSON storage (zero telemetry) and a global hotkey (`Ctrl+Shift+I`), or the tray menu, to pause tracking instantly.
+
+> **Where your data lives:** `%APPDATA%\TypeTrace\` — `typetrace_data.json` (statistics), `settings.json` (preferences) and a rotating `typetrace.log`. Nothing ever leaves your machine. The file holds per-hour key counts and key-to-key transition counts in plain text, so treat it as personal data.
 - **🎛️ Floating In-Game Overlay:** A compact, borderless, always-on-top draggable widget showing live APM counter.
 
 ---
@@ -82,6 +84,11 @@ If you prefer to run the application from source or customize it, follow these s
    python main.py
    ```
 
+5. **Run the tests:**
+   ```bash
+   python -m unittest test_typetrace test_ui_smoke
+   ```
+
 ---
 
 ## ☕ Support the Project
@@ -94,10 +101,15 @@ If you find TypeTrace useful for your daily work or gaming sessions, consider su
 
 ## 🗺️ Roadmap
 
+- [x] Multi-language UI (EN / IT)
+- [ ] Spanish translation
+- [x] Typing accuracy / error-rate panel
+- [ ] Per-finger and per-hand load analysis
+- [x] Daily history view and personal records
+- [ ] Weekly and monthly roll-ups
+- [ ] ISO, AZERTY and QWERTZ layouts (75% and 65% sizes)
 - [ ] Linux & macOS support
 - [ ] Weekly PDF report export
-- [ ] Multi-language UI (EN / IT / ES)
-- [ ] More heatmap themes
 - [ ] Web dashboard (optional companion)
 - [ ] Plugin system for custom analytics
 

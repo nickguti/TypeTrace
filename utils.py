@@ -125,27 +125,41 @@ def is_startup_enabled():
     bat_path = os.path.join(startup_dir, "typetrace_startup.bat")
     return os.path.exists(bat_path)
 
+def _csv_safe(value):
+    """Neutralizza le celle che un foglio di calcolo interpreterebbe come formule.
+
+    Fra i nomi dei tasti ci sono "=", "-" e "+": aperti in Excel diventerebbero
+    formule (ed e' una via nota per l'esecuzione di comandi).
+    """
+    text = str(value)
+    if text[:1] in ("=", "+", "-", "@"):
+        return "'" + text
+    return text
+
+
 def export_stats_to_csv(filepath, aggregated_data):
     """
-    Exports keystrokes, combinations, and bigrams statistics to a single CSV file with clean headers.
+    Exports keystrokes, combinations, bigrams, hourly history and burst records.
     aggregated_data format:
     {
         "keys": {"A": 50, "Space": 120, ...},
         "combinations": {"Ctrl+C": 5, ...},
-        "bigrams": {"T": {"H": 12, ...}}
+        "bigrams": {"T": {"H": 12, ...}},
+        "hourly": {"2026-08-17T09:00:00": {"keys": {...}}},   # facoltativo
+        "burst_records": [{"timestamp": ..., "peak_apm": ...}] # facoltativo
     }
     """
     try:
-        with open(filepath, mode='w', newline='', encoding='utf-8') as f:
+        with open(filepath, mode='w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
-            
+
             # --- Key Counts Section ---
             writer.writerow(["=== KEYSTROKE COUNTS ==="])
             writer.writerow(["Key", "Press Count"])
             # Sort by count descending
             sorted_keys = sorted(aggregated_data.get("keys", {}).items(), key=lambda x: x[1], reverse=True)
             for key, count in sorted_keys:
-                writer.writerow([key, count])
+                writer.writerow([_csv_safe(key), count])
                 
             writer.writerow([]) # Empty spacer line
             
@@ -154,7 +168,7 @@ def export_stats_to_csv(filepath, aggregated_data):
             writer.writerow(["Combination", "Press Count"])
             sorted_combos = sorted(aggregated_data.get("combinations", {}).items(), key=lambda x: x[1], reverse=True)
             for combo, count in sorted_combos:
-                writer.writerow([combo, count])
+                writer.writerow([_csv_safe(combo), count])
                 
             writer.writerow([]) # Empty spacer line
             
@@ -168,102 +182,199 @@ def export_stats_to_csv(filepath, aggregated_data):
             # Sort by transitions count descending
             sorted_bigrams = sorted(bigrams_list, key=lambda x: x[2], reverse=True)
             for k1, k2, count in sorted_bigrams[:100]: # Limit to top 100 bigrams to keep it readable
-                writer.writerow([k1, k2, count])
-                
+                writer.writerow([_csv_safe(k1), _csv_safe(k2), count])
+
+            # --- Cronologia oraria ---
+            # Le caselle "includi cronologia" e "includi burst" del dialogo di
+            # esportazione non avevano alcun effetto sul CSV: i dati arrivavano
+            # fin qui e venivano scartati.
+            hourly = aggregated_data.get("hourly")
+            if hourly:
+                writer.writerow([])
+                writer.writerow(["=== HOURLY HISTORY ==="])
+                writer.writerow(["Hour", "Key", "Press Count"])
+                for hour_key in sorted(hourly.keys()):
+                    keys = hourly[hour_key].get("keys", {}) if isinstance(hourly[hour_key], dict) else {}
+                    for key, count in sorted(keys.items(), key=lambda x: x[1], reverse=True):
+                        writer.writerow([hour_key, _csv_safe(key), count])
+
+            # --- Record di velocita' ---
+            bursts = aggregated_data.get("burst_records")
+            if bursts:
+                writer.writerow([])
+                writer.writerow(["=== BURST RECORDS ==="])
+                writer.writerow(["Timestamp", "Peak APM", "Duration (s)"])
+                for record in bursts:
+                    if isinstance(record, dict):
+                        writer.writerow([record.get("timestamp", ""),
+                                         record.get("peak_apm", 0),
+                                         record.get("duration", 0)])
+
         return True
     except Exception as e:
         print(f"Error exporting CSV: {e}")
         return False
 
 def setup_first_run():
+    """Preparazione al primo avvio.
+
+    Crea soltanto il file di lancio accanto al codice, e solo quando si gira da
+    sorgente. La creazione del collegamento sul Desktop non avviene piu' in
+    automatico: scrivere sul Desktop dell'utente senza chiederglielo e' un
+    effetto collaterale inatteso, e nell'eseguibile congelato il collegamento
+    puntava comunque a un main.py inesistente. Ora e' create_desktop_shortcut(),
+    che va invocata su richiesta esplicita.
     """
-    Automates configuration on the first launch:
-    1. Creates 'run_typetrace.bat' in the project directory.
-    2. Dynamically queries the Windows Desktop path and generates a 'TypeTrace.lnk' shortcut
-       pointing to the .bat script, avoiding overwrites if either exists.
-    """
+    if getattr(sys, "frozen", False):
+        return True
+
     project_dir = os.path.dirname(os.path.abspath(__file__))
     bat_path = os.path.join(project_dir, "run_typetrace.bat")
-    
-    # 1. Create run_typetrace.bat if it doesn't exist
-    if not os.path.exists(bat_path):
-        bat_content = (
-            "@echo off\n"
-            'cd /d "%~dp0"\n'
-            'start "" pythonw main.py\n'
-            "exit\n"
-        )
-        try:
-            with open(bat_path, "w", encoding="utf-8") as f:
-                f.write(bat_content)
-            print(f"Created script: {bat_path}")
-        except Exception as e:
-            print(f"Error creating batch script: {e}")
-            return False
 
-    # 2. Find Desktop and create TypeTrace.lnk if it doesn't exist
-    try:
-        res = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "[Environment]::GetFolderPath('Desktop')"],
-            capture_output=True, text=True, check=True
-        )
-        desktop_path = res.stdout.strip()
-    except Exception:
-        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-        
-    shortcut_path = os.path.join(desktop_path, "TypeTrace.lnk")
-    
-    if not os.path.exists(shortcut_path):
-        # We invoke PowerShell ComObject WScript.Shell to create the shortcut file (.lnk)
-        # This resolves the exact Windows Desktop path dynamically even on OneDrive folders
-        ps_script = f"""
-        $WshShell = New-Object -ComObject WScript.Shell
-        $Shortcut = $WshShell.CreateShortcut('{shortcut_path}')
-        $Shortcut.TargetPath = '{bat_path}'
-        $Shortcut.WorkingDirectory = '{project_dir}'
-        $Shortcut.Save()
-        """
-        try:
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, check=True)
-            print(f"Created desktop shortcut pointing to: {bat_path}")
-        except Exception as e:
-            print(f"Error creating desktop shortcut: {e}")
-            return False
-            
-    return True
+    if os.path.exists(bat_path):
+        return True
 
-def get_active_window_process_name():
+    # Si usa l'interprete corrente, non "pythonw" dal PATH: altrimenti in un
+    # ambiente virtuale si finisce per lanciare l'interprete di sistema.
+    pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
+    if not os.path.exists(pythonw_exe):
+        pythonw_exe = sys.executable
+
+    bat_content = (
+        "@echo off\n"
+        'cd /d "%~dp0"\n'
+        f'start "" "{pythonw_exe}" main.py\n'
+        "exit\n"
+    )
+    try:
+        with open(bat_path, "w", encoding="utf-8") as f:
+            f.write(bat_content)
+        return True
+    except Exception as e:
+        print(f"Error creating batch script: {e}")
+        return False
+
+
+def create_desktop_shortcut():
+    """Crea un collegamento a TypeTrace sul Desktop dell'utente.
+
+    I percorsi vengono passati come argomenti separati e non interpolati nello
+    script PowerShell: un apostrofo nel nome utente rompeva la sintassi (e in
+    generale permetteva di iniettare comandi).
     """
-    Directly queries Windows APIs using ctypes to find the active foreground process (.exe name).
-    Requires no external python packages, ensuring zero overhead.
+    target = sys.executable if getattr(sys, "frozen", False) else \
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_typetrace.bat")
+    working_dir = os.path.dirname(target)
+
+    ps_script = (
+        "param([string]$Target, [string]$WorkDir)\n"
+        "$desktop = [Environment]::GetFolderPath('Desktop')\n"
+        "$WshShell = New-Object -ComObject WScript.Shell\n"
+        "$Shortcut = $WshShell.CreateShortcut((Join-Path $desktop 'TypeTrace.lnk'))\n"
+        "$Shortcut.TargetPath = $Target\n"
+        "$Shortcut.WorkingDirectory = $WorkDir\n"
+        "$Shortcut.Save()\n"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script,
+             "-Target", target, "-WorkDir", working_dir],
+            capture_output=True, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return True
+    except Exception as e:
+        print(f"Error creating desktop shortcut: {e}")
+        return False
+
+def get_active_window_process_name(hwnd=None):
+    """Nome dell'eseguibile della finestra in primo piano.
+
+    Si usa QueryFullProcessImageNameW invece di GetModuleBaseNameW: la prima
+    funziona con i diritti ridotti PROCESS_QUERY_LIMITED_INFORMATION, la
+    seconda ne richiede di piu' (PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)
+    e falliva sempre in silenzio, restituendo None. Con essa non ha mai
+    funzionato niente di quanto ci sta sopra: cambio automatico di profilo,
+    mappature dei processi, elenco delle app recenti, banner "gaming mode".
     """
     try:
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if hwnd is None:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
         if not hwnd:
             return None
-            
+
         pid = ctypes.c_ulong()
         ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        
-        # Open process for name retrieval (0x1000 = PROCESS_QUERY_LIMITED_INFORMATION)
+        if not pid.value:
+            return None
+
+        # 0x1000 = PROCESS_QUERY_LIMITED_INFORMATION
         handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid.value)
         if not handle:
             return None
-            
-        # Retrieve base name using PSAPI
-        buf = ctypes.create_unicode_buffer(260)
-        ctypes.windll.psapi.GetModuleBaseNameW(handle, 0, buf, ctypes.sizeof(buf) // 2)
-        ctypes.windll.kernel32.CloseHandle(handle)
-        
-        name = buf.value
-        return name if name else None
+
+        try:
+            size = ctypes.c_ulong(260)
+            buf = ctypes.create_unicode_buffer(size.value)
+            if ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                name = os.path.basename(buf.value)
+                if name:
+                    return name
+
+            # Ripiego per i sistemi piu' vecchi: richiede diritti maggiori
+            handle2 = ctypes.windll.kernel32.OpenProcess(0x0400 | 0x0010, False, pid.value)
+            if handle2:
+                try:
+                    buf2 = ctypes.create_unicode_buffer(260)
+                    if ctypes.windll.psapi.GetModuleBaseNameW(handle2, 0, buf2, 260):
+                        return buf2.value or None
+                finally:
+                    ctypes.windll.kernel32.CloseHandle(handle2)
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+
+        return None
     except Exception:
         return None
+
+# Applicazioni note. Vivono qui perche' li usano sia classify_process sia
+# tracker.py: prima esistevano due copie divergenti e quella del tracker non
+# veniva letta da nessuno.
+KNOWN_GAMING_PROCESSES = {
+    "steam.exe", "epicgameslauncher.exe", "leagueoflegends.exe", "valorant.exe",
+    "csgo.exe", "cs2.exe", "minecraft.exe", "fortnite.exe", "robloxplayerbeta.exe",
+    "r5apex.exe", "overwatch.exe", "destiny2.exe", "eldenring.exe", "cyberpunk2077.exe",
+    "witcher3.exe", "gta5.exe", "rockstargameslauncher.exe", "battlenet.exe",
+    "pathofexile.exe", "dota2.exe", "among_us.exe", "terraria.exe",
+    "stardewvalley.exe", "re2.exe", "re3.exe", "re4.exe", "sekiro.exe",
+    "fallout4.exe", "skyrim.exe", "skyrimse.exe", "newvegaslauncher.exe",
+}
+
+KNOWN_DESKTOP_PROCESSES = {
+    "explorer.exe", "chrome.exe", "firefox.exe", "msedge.exe", "opera.exe",
+    "brave.exe", "code.exe", "cursor.exe", "devenv.exe", "pycharm64.exe",
+    "idea64.exe", "webstorm64.exe", "sublime_text.exe", "notepad.exe",
+    "notepad++.exe", "wordpad.exe", "winword.exe", "excel.exe", "powerpnt.exe",
+    "onenote.exe", "outlook.exe", "thunderbird.exe", "slack.exe", "discord.exe",
+    "teams.exe", "zoom.exe", "telegram.exe", "whatsapp.exe", "signal.exe",
+    "cmd.exe", "powershell.exe", "windowsterminal.exe", "wt.exe",
+    "taskmgr.exe", "regedit.exe", "spotify.exe", "vlc.exe", "obs64.exe",
+    "obsidian.exe", "notion.exe", "figma.exe", "xd.exe", "photoshop.exe",
+    "illustrator.exe", "premiere.exe", "afterfx.exe", "acrobat.exe",
+    "thunderbird.exe", "keepass.exe", "keepassxc.exe", "1password.exe",
+    "bitwarden.exe", "zotero.exe", "libreoffice.exe", "soffice.exe",
+}
 
 # Game detection variables
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 _classify_cache = {}
 CACHE_EXPIRY = 30
+
+# Soglia di punteggio oltre la quale un processo e' considerato un gioco.
+# Era 15, cioe' meno del solo indizio "usa una libreria grafica": qualunque
+# applicazione accelerata via GPU e non presente nell'elenco desktop veniva
+# classificata come gioco.
+GAMING_SCORE_THRESHOLD = 45
 
 def _scan_psutil_info(process_name):
     """Slow scan using psutil to find target process details and memory mapped DLLs."""
@@ -313,6 +424,14 @@ def _scan_psutil_info(process_name):
         "dlls": []
     }
 
+def shutdown_executor():
+    """Chiude il pool di thread usato per le scansioni dei processi."""
+    try:
+        _executor.shutdown(wait=False)
+    except Exception:
+        pass
+
+
 def classify_process(process_name, hwnd=None) -> str:
     """
     Returns "gaming" or "desktop".
@@ -327,14 +446,24 @@ def classify_process(process_name, hwnd=None) -> str:
             cached_result, cached_time = _classify_cache[proc_lower]
             if now - cached_time < CACHE_EXPIRY:
                 return cached_result
-                
+
+        # Scorciatoie certe: non serve nessuna scansione
+        if proc_lower in KNOWN_DESKTOP_PROCESSES:
+            _classify_cache[proc_lower] = ("desktop", now)
+            return "desktop"
+        if proc_lower in KNOWN_GAMING_PROCESSES:
+            _classify_cache[proc_lower] = ("gaming", now)
+            return "gaming"
+
         score = 0
-        
+
         # Submit psutil scan to background thread pool
+        scan_timed_out = False
         future = _executor.submit(_scan_psutil_info, process_name)
         try:
             slow_info = future.result(timeout=0.5)
         except Exception:
+            scan_timed_out = True
             slow_info = {
                 "found": False,
                 "exe_path": "",
@@ -342,21 +471,26 @@ def classify_process(process_name, hwnd=None) -> str:
                 "dlls": []
             }
             
-        # --- SIGNAL 1: Graphics API detection (+40 pts) ---
-        game_dlls = ['d3d9.dll', 'd3d11.dll', 'd3d12.dll', 'opengl32.dll', 'vulkan-1.dll', 'dxgi.dll']
-        for dll in game_dlls:
-            if any(dll in path for path in slow_info.get("dlls", [])):
-                score += 40
-                break
+        # --- SEGNALE 1: librerie grafiche ---
+        # Da sole non dicono quasi nulla: le carica ogni applicazione
+        # accelerata, browser ed Electron compresi. Le API esclusive dei giochi
+        # (Vulkan, Direct3D 12) pesano piu' di DXGI, che e' generica.
+        strong_dlls = ['vulkan-1.dll', 'd3d12.dll', 'd3d9.dll']
+        weak_dlls = ['d3d11.dll', 'opengl32.dll', 'dxgi.dll']
+        dll_paths = slow_info.get("dlls", [])
+        if any(any(dll in path for path in dll_paths) for dll in strong_dlls):
+            score += 35
+        elif any(any(dll in path for path in dll_paths) for dll in weak_dlls):
+            score += 10
                 
-        # --- SIGNAL 2: Fullscreen/Borderless window detection (+25 pts / +10 pts) ---
+        # --- SEGNALE 2: finestra a schermo intero e senza bordi ---
+        # Una sola lettura della finestra: prima i segnali 2 e 5 premiavano
+        # entrambi l'assenza della barra del titolo, contando due volte la
+        # stessa caratteristica fisica.
         try:
-            import ctypes
             import ctypes.wintypes
             user32 = ctypes.windll.user32
-            target_hwnd = hwnd
-            if target_hwnd is None:
-                target_hwnd = user32.GetForegroundWindow()
+            target_hwnd = hwnd if hwnd is not None else user32.GetForegroundWindow()
             if target_hwnd:
                 rect = ctypes.wintypes.RECT()
                 user32.GetWindowRect(target_hwnd, ctypes.byref(rect))
@@ -371,14 +505,17 @@ def classify_process(process_name, hwnd=None) -> str:
                 WS_CAPTION = 0x00C00000
                 style = user32.GetWindowLongW(target_hwnd, GWL_STYLE)
                 is_borderless = bool(style & WS_POPUP) and not bool(style & WS_CAPTION)
+                has_caption = bool(style & WS_CAPTION)
 
                 if covers_screen and is_borderless:
-                    score += 25
+                    score += 30
                 elif covers_screen:
-                    score += 10
+                    score += 15
+                elif not has_caption:
+                    score += 5
         except Exception:
             pass
-            
+
         # --- SIGNAL 3: Known game launcher / platform processes (+20 pts) ---
         gaming_platforms = [
             "steam.exe", "epicgameslauncher.exe", "gog.exe", "gogalaxy.exe",
@@ -403,44 +540,18 @@ def classify_process(process_name, hwnd=None) -> str:
             if any(p in exe_path_normalized for p in gaming_paths):
                 score += 15
                 
-        # --- SIGNAL 5: No standard window chrome (+10 pts) ---
-        try:
-            import ctypes
-            user32 = ctypes.windll.user32
-            target_hwnd = hwnd
-            if target_hwnd is None:
-                target_hwnd = user32.GetForegroundWindow()
-            if target_hwnd:
-                GWL_STYLE = -16
-                WS_CAPTION = 0x00C00000
-                style = user32.GetWindowLongW(target_hwnd, GWL_STYLE)
-                has_caption = bool(style & WS_CAPTION)
-                if not has_caption:
-                    score += 10
-        except Exception:
-            pass
-            
-        # --- SIGNAL 6: Known non-game processes (-50 pts) ---
-        definite_desktop = [
-            "explorer.exe", "chrome.exe", "firefox.exe", "msedge.exe", "opera.exe",
-            "brave.exe", "code.exe", "cursor.exe", "devenv.exe", "pycharm64.exe",
-            "idea64.exe", "webstorm64.exe", "sublime_text.exe", "notepad.exe",
-            "notepad++.exe", "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe",
-            "slack.exe", "discord.exe", "teams.exe", "zoom.exe", "telegram.exe",
-            "cmd.exe", "powershell.exe", "windowsterminal.exe", "wt.exe",
-            "taskmgr.exe", "regedit.exe", "spotify.exe", "vlc.exe", "obs64.exe"
-        ]
-        if proc_lower in definite_desktop:
+        # --- SEGNALE 6: applicazioni sicuramente non giochi ---
+        if proc_lower in KNOWN_DESKTOP_PROCESSES:
             score -= 50
-            
+
         # Classification
-        if score >= 15:
-            result = "gaming"
-        else:
-            result = "desktop"
-            
-        # Cache results
-        _classify_cache[proc_lower] = (result, now)
+        result = "gaming" if score >= GAMING_SCORE_THRESHOLD else "desktop"
+
+        # Un verdetto emesso senza i dati della scansione non va messo in cache:
+        # altrimenti mezzo secondo di lentezza fissava per trenta secondi una
+        # classificazione presa senza indizi.
+        if not scan_timed_out:
+            _classify_cache[proc_lower] = (result, now)
         return result
     except Exception:
         return "desktop"
