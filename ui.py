@@ -517,7 +517,9 @@ class HeaderWidget(QWidget):
         self.compact_btn.setToolTip(self.tr.t("compact_mode") if self.tr else "Compact Mode")
         layout.addWidget(self.compact_btn)
         
-        self.settings_btn = QPushButton("⚙️")
+        # Senza il selettore di variante U+FE0F: il font dell'interfaccia non
+        # lo contiene e lo disegnava come un quadratino vuoto accanto all'icona.
+        self.settings_btn = QPushButton("⚙")
         self.settings_btn.setFixedSize(32, 32)
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setToolTip(self.tr.t("settings") if self.tr else "Settings")
