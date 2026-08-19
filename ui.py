@@ -30,7 +30,7 @@ class NoScrollComboBox(QComboBox):
     def wheelEvent(self, event):
         event.ignore()
 
-APP_VERSION = "3.1.5"
+APP_VERSION = "3.2.0"
 APP_GITHUB = "https://github.com/nickguti/TypeTrace"
 
 FONT_FAMILY = "Segoe UI Variable"

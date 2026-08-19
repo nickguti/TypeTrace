@@ -1,25 +1,24 @@
 # Build output
 build/
 dist/
-# TypeTrace.spec e' la ricetta di build e va versionata
+*.egg-info/
 
-# Python cache
+# Python
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+venv/
 
-# Logs
+# Log dell'applicazione (ruotati)
 *.log
+*.log.*
 
-# Local data
+# Dati dell'utente.
+# Dalla 3.2.0 vivono in %APPDATA%\TypeTrace; queste voci restano per le
+# installazioni precedenti, che li scrivevano accanto al codice.
 typetrace_data.json
+typetrace_data.json.bak
+typetrace_data.json.tmp
+database_corrupted.json
 settings.json
-
-# Temp scripts
-apply_fixes.py
-apply_sync.py
-fix_get.py
-fix_mouse.py
-build_ui.py
-test_overlay.py
-test_overlay_2.py
